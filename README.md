@@ -141,6 +141,12 @@ echolingua generate data/sample.csv --recipe english_then_target --from 1 --to 5
 
 WAV is the guaranteed offline format. MP3 depends on local export tooling support.
 
+Generate one file per sentence into a folder:
+
+```bash
+echolingua generate-folder data/sample.csv outputs/sentence_files --recipe shadowing_basic --from 1 --to 100
+```
+
 Provider diagnostics:
 
 ```bash

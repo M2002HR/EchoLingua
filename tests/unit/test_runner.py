@@ -50,3 +50,31 @@ def test_generate_records_progress_events(tmp_path, monkeypatch) -> None:
     assert stages == ["finished"]
     event_names = [row[0] for row in conn.execute("SELECT event_name FROM job_events WHERE job_id='job-progress-1'").fetchall()]
     assert "job_progress" in event_names
+
+
+def test_generate_sentence_files_creates_one_file_per_sentence(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    base = load_config()
+    config = type(base)(
+        root_dir=tmp_path,
+        default=base.default,
+        providers=base.providers,
+        recipes=base.recipes,
+    )
+    runner = PipelineRunner(config)
+    result = runner.generate_sentence_files(
+        "job-folder-1",
+        Path("/home/mhr/Code/EchoLingua/data/sample.csv"),
+        "shadowing_basic",
+        tmp_path / "sentence_outputs",
+        output_format="wav",
+        from_sentence_id="1",
+        to_sentence_id="3",
+    )
+    assert result["file_count"] == 3
+    files = result["files"]
+    assert len(files) == 3
+    assert Path(files[0]["output"]).exists()
+    assert Path(files[1]["output"]).exists()
+    assert Path(files[2]["output"]).exists()
+    assert Path(files[0]["manifest"]).exists()

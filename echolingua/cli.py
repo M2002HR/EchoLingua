@@ -147,6 +147,47 @@ def generate(
     _run_command(_action)
 
 
+@app.command("generate-folder")
+def generate_folder(
+    csv_path: Path = typer.Argument(..., help="Input bilingual sentence CSV"),
+    output_dir: Path = typer.Argument(..., help="Output folder for per-sentence files"),
+    recipe: str = typer.Option("shadowing_basic", help="Recipe name"),
+    from_sentence_id: Optional[str] = typer.Option(None, "--from", help="Inclusive starting sentence id"),
+    to_sentence_id: Optional[str] = typer.Option(None, "--to", help="Inclusive ending sentence id"),
+    output_format: str = typer.Option("wav", help="Output audio format for each sentence file"),
+    job_id: Optional[str] = typer.Option(None, help="Existing job id or generated if omitted"),
+    no_progress: bool = typer.Option(False, "--no-progress", help="Disable progress display"),
+) -> None:
+    def _action() -> None:
+        result = PipelineRunner(load_config()).generate_sentence_files(
+            job_id or new_job_id(),
+            csv_path,
+            recipe,
+            output_dir,
+            output_format=output_format,
+            from_sentence_id=from_sentence_id,
+            to_sentence_id=to_sentence_id,
+            progress_reporter=build_progress_reporter(no_progress=no_progress),
+        )
+        _echo_json(
+            {
+                "job_id": result["job_id"],
+                "output_dir": result["output_dir"],
+                "file_count": result["file_count"],
+                "files": [
+                    {
+                        "sentence_id": item["sentence_id"],
+                        "output": item["output"],
+                        "manifest": item["manifest"],
+                    }
+                    for item in result["files"]
+                ],
+            }
+        )
+
+    _run_command(_action)
+
+
 @providers_app.command("list")
 def providers_list(kind: str = typer.Option("tts", help="Provider kind")) -> None:
     def _action() -> None:

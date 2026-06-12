@@ -220,6 +220,134 @@ class PipelineRunner:
             )
             raise
 
+    def generate_sentence_files(
+        self,
+        job_id: str,
+        csv_path: Path,
+        recipe_name: str,
+        output_dir: Path,
+        output_format: str = "wav",
+        from_sentence_id: str | None = None,
+        to_sentence_id: str | None = None,
+        progress_reporter: ProgressReporter | None = None,
+    ) -> dict[str, object]:
+        self.repositories.create_job(job_id, recipe_name)
+        reporter = progress_reporter or NullProgressReporter()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        completed_steps = 0
+        total_steps = 1
+        reporter.start(JobProgress(stage="created", message="Batch job created", completed_steps=0, total_steps=total_steps))
+
+        def emit_progress(
+            stage: str,
+            message: str,
+            *,
+            advance: int = 1,
+            status: str = "running",
+            total_override: int | None = None,
+        ) -> JobProgress:
+            nonlocal completed_steps, total_steps
+            if total_override is not None:
+                total_steps = total_override
+            completed_steps = min(total_steps, completed_steps + advance)
+            progress = JobProgress(
+                stage=stage,
+                message=message,
+                completed_steps=completed_steps,
+                total_steps=total_steps,
+                status=status,
+            )
+            self.repositories.update_job_progress(job_id, stage, message, completed_steps, total_steps, status=status)
+            self.repositories.record_event(job_id, "job_progress", progress.to_dict())
+            self.logger.event("job_progress", job_id, **progress.to_dict())
+            reporter.update(progress)
+            return progress
+
+        try:
+            emit_progress("loading_csv", f"Loading {csv_path.name}")
+            sentences, report = load_sentences_with_report(csv_path)
+            emit_progress("validating", f"Validated {report.total_rows} rows")
+            if not report.is_valid:
+                if report.issues:
+                    raise ValidationError(report.issues[0].message)
+                raise ValidationError("CSV validation failed.")
+            filtered = self._filter_sentences(sentences, from_sentence_id, to_sentence_id)
+            SentenceRepository(self.db).upsert_many(filtered)
+            recipe = get_recipe(self.config.recipes, recipe_name)
+            total_steps = 3 + len(filtered) * (len(recipe.segments) + 4)
+            files: list[dict[str, object]] = []
+
+            for index, sentence in enumerate(filtered, start=1):
+                emit_progress("building_plan", f"Building sentence {index}/{len(filtered)} ({sentence.id})")
+                plan = AudioPlanBuilder().build(
+                    job_id,
+                    recipe,
+                    [sentence],
+                    source_csv_path=str(csv_path),
+                    target_language="fr",
+                    target_column="french",
+                )
+                output_path = output_dir / f"{index:03d}_{self._safe_filename_part(sentence.id)}_{recipe_name}.{output_format}"
+                builder = AudioBuilder(
+                    selector=self._selector(),
+                    cache_dir=self.config.tts_cache_dir,
+                    repositories=self.repositories,
+                    progress_callback=lambda stage, message: emit_progress(stage, message),
+                )
+                output_info = builder.build(plan, output_path, output_format=output_format)
+                emit_progress("saving_manifest", f"Writing manifest for {output_path.name}")
+                manifest_path = output_path.with_suffix(output_path.suffix + ".manifest.json")
+                manifest = write_manifest(plan, output_info, manifest_path)
+                emit_progress("saving_records", f"Recording output metadata for {output_path.name}")
+                self.repositories.record_audio_output(job_id, output_path, manifest_path, int(output_info["duration_ms"]))
+                files.append(
+                    {
+                        "sentence_id": sentence.id,
+                        "output": str(output_path),
+                        "manifest": str(manifest_path),
+                        "duration_ms": int(output_info["duration_ms"]),
+                        "recipe": recipe_name,
+                        "manifest_data": manifest,
+                    }
+                )
+
+            self.repositories.record_event(
+                job_id,
+                "folder_generated",
+                {"output_dir": str(output_dir), "file_count": len(files), "output_format": output_format},
+            )
+            finished = emit_progress("finished", f"Generated {len(files)} sentence files", status="completed")
+            self.repositories.complete_job(job_id, total_steps=finished.total_steps)
+            self.logger.event(
+                "folder_generated",
+                job_id,
+                output_dir=str(output_dir),
+                file_count=len(files),
+                output_format=output_format,
+            )
+            reporter.stop(finished)
+            return {
+                "job_id": job_id,
+                "recipe_name": recipe_name,
+                "output_dir": str(output_dir),
+                "file_count": len(files),
+                "files": files,
+            }
+        except Exception as exc:
+            self.repositories.record_event(job_id, "job_failed", {"error": str(exc)})
+            self.repositories.fail_job(job_id, str(exc))
+            self.logger.event("job_failed", job_id, error=str(exc))
+            reporter.stop(
+                JobProgress(
+                    stage="failed",
+                    message=str(exc),
+                    completed_steps=completed_steps,
+                    total_steps=total_steps,
+                    status="failed",
+                )
+            )
+            raise
+
     def _load_filtered_sentences(
         self,
         csv_path: Path,
@@ -261,3 +389,7 @@ class PipelineRunner:
     def _selector(self) -> ProviderSelector:
         registry = build_registry(self.config.providers)
         return ProviderSelector(registry.list("tts"), self._provider_policy())
+
+    def _safe_filename_part(self, value: str) -> str:
+        cleaned = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in value.strip())
+        return cleaned.strip("_") or "sentence"
