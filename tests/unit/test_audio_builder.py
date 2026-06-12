@@ -15,6 +15,6 @@ def test_audio_builder_with_fake_provider(tmp_path: Path) -> None:
     )
     selector = ProviderSelector([FakeTTSProvider()], ProviderSelectionPolicy())
     output = tmp_path / "out.mp3"
-    info = AudioBuilder(selector, tmp_path / "cache").build(plan, output)
+    info = AudioBuilder(selector, tmp_path / "cache").build(plan, output, output_format="wav")
     assert output.exists()
     assert info["duration_ms"] > 0

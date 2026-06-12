@@ -14,3 +14,10 @@ def test_explicit_without_fallback() -> None:
     b = FakeTTSProvider(name="b", priority=2)
     policy = ProviderSelectionPolicy(strategy="explicit", explicit_provider="b", allow_fallback_on_error=False)
     assert [p.metadata.name for p in ProviderSelector([a, b], policy).ordered()] == ["b"]
+
+
+def test_random_selection_preserves_all_providers() -> None:
+    a = FakeTTSProvider(name="a", priority=1)
+    b = FakeTTSProvider(name="b", priority=2)
+    ordered = ProviderSelector([a, b], ProviderSelectionPolicy(strategy="random")).ordered()
+    assert sorted(provider.metadata.name for provider in ordered) == ["a", "b"]

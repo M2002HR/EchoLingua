@@ -7,10 +7,13 @@ from echolingua.sentences.loader import load_sentences
 
 
 def test_load_sentences_sample() -> None:
-    sentences = load_sentences(Path("data/french_100_sentences_mohammad.csv"))
-    assert len(sentences) == 5
-    assert sentences[0].persian == "سلام"
-    assert sentences[0].tags == ["greeting", "basic"]
+    sentences = load_sentences(Path("data/sample.csv"))
+    assert len(sentences) >= 39
+    assert sentences[0].persian == "سلام."
+    assert sentences[0].english == "Hello."
+    assert sentences[0].french == "Salut."
+    assert sentences[0].recommended_start == "day_1"
+    assert sentences[0].tags == ["starter", "daily"]
 
 
 def test_csv_validation_missing_required(tmp_path: Path) -> None:
