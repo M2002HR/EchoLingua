@@ -1,6 +1,0 @@
-id,persian,french,level,category,recommended_start,enabled,tags,notes,priority,difficulty,voice_hint,pronunciation_note
-1,سلام,Bonjour,A1,greetings,1,true,"greeting,basic",,1,1,,
-2,حالت چطور است؟,Comment ça va ?,A1,greetings,2,true,"greeting,question",,1,1,,
-3,اسم من محمد است.,Je m'appelle Mohammad.,A1,introduction,3,true,introduction,,2,1,,
-4,من فرانسوی یاد می‌گیرم.,J'apprends le français.,A1,learning,4,true,learning,,2,2,,
-5,متشکرم.,Merci.,A1,politeness,5,true,polite,,1,1,,

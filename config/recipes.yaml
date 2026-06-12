@@ -1,6 +1,6 @@
 recipes:
   shadowing_basic:
-    description: Basic shadowing: Persian prompt, pause, French target, repeat.
+    description: "Basic shadowing: Persian prompt, pause, French target, repeat."
     output_format: mp3
     segments:
       - kind: tts
@@ -20,7 +20,7 @@ recipes:
         language: fr
         voice: fake-fr
   active_recall:
-    description: Persian prompt with longer recall pause before French answer.
+    description: "Persian prompt with longer recall pause before French answer."
     output_format: mp3
     segments:
       - kind: tts
@@ -35,3 +35,26 @@ recipes:
         voice: fake-fr
       - kind: silence
         duration_ms: 700
+  english_then_target:
+    description: "English reference first, then French target twice."
+    output_format: mp3
+    segments:
+      - kind: tts
+        text_field: english
+        language: en
+        voice: fake-neutral
+      - kind: silence
+        duration_ms: 1200
+      - kind: tts
+        text_field: target
+        language: fr
+        voice: fake-fr
+        rate: "-20%"
+      - kind: silence
+        duration_ms: 1200
+      - kind: tts
+        text_field: target
+        language: fr
+        voice: fake-fr
+      - kind: silence
+        duration_ms: 3000
