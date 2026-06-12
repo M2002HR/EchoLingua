@@ -36,4 +36,5 @@ def test_storage_stats_and_cache(tmp_path: Path, monkeypatch) -> None:
     assert stats.total_provider_attempts == 1
     assert stats.provider_attempts_by_provider["fake"] == 1
     assert stats.generated_audio_outputs == 1
+    assert stats.latest_job["job_id"] == "job-1"
     assert cache_stats.entry_count == 1

@@ -25,6 +25,7 @@ class StatsSummary:
     cache_misses: int
     generated_audio_outputs: int
     total_output_duration_ms: int
+    latest_job: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -37,6 +38,7 @@ class StatsSummary:
             "cache_misses": self.cache_misses,
             "generated_audio_outputs": self.generated_audio_outputs,
             "total_output_duration_ms": self.total_output_duration_ms,
+            "latest_job": self.latest_job,
         }
 
 
@@ -215,6 +217,14 @@ class StorageRepositories:
             total_output_duration_ms = int(
                 conn.execute("SELECT COALESCE(SUM(duration_ms), 0) FROM audio_outputs").fetchone()[0]
             )
+            latest_job_row = conn.execute(
+                """
+                SELECT job_id, recipe_name, status, current_stage, completed_steps, total_steps
+                FROM jobs
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
         return StatsSummary(
             total_jobs=total_jobs,
             successful_jobs=successful_jobs,
@@ -225,6 +235,18 @@ class StorageRepositories:
             cache_misses=cache_misses,
             generated_audio_outputs=generated_audio_outputs,
             total_output_duration_ms=total_output_duration_ms,
+            latest_job=(
+                {
+                    "job_id": str(latest_job_row["job_id"]),
+                    "recipe_name": str(latest_job_row["recipe_name"]),
+                    "status": str(latest_job_row["status"]),
+                    "current_stage": latest_job_row["current_stage"],
+                    "completed_steps": int(latest_job_row["completed_steps"] or 0),
+                    "total_steps": int(latest_job_row["total_steps"] or 0),
+                }
+                if latest_job_row is not None
+                else None
+            ),
         )
 
     def cache_stats_summary(self) -> CacheStatsSummary:
