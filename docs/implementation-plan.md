@@ -1616,6 +1616,15 @@ Acceptance:
 
 No real Piper dependency required yet.
 
+Current implementation status:
+
+* done: added `echolingua.providers.tts.piper.PiperTTSProvider` placeholder
+* done: `config/providers.yaml` now includes a disabled `piper` entry with `model_path`, `config_path`, language voices, and `default_voice`
+* done: `providers list` reports `piper` and whether Piper/Wyoming Piper runtime appears available locally
+* done: `providers test piper` fails clearly with placeholder/runtime guidance
+* done: config validation requires `model_path` and `config_path` before `piper` can be enabled
+* note: no model download, no local Piper bootstrapping, and no real Piper synthesis path are implemented in this phase
+
 ## Phase 7 — AJIL Preparation
 
 Goal:

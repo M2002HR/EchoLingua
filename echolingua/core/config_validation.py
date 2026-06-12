@@ -5,7 +5,7 @@ from typing import Any
 
 from echolingua.core.errors import ConfigError
 
-SUPPORTED_PROVIDER_TYPES = {"fake", "edge"}
+SUPPORTED_PROVIDER_TYPES = {"fake", "edge", "piper"}
 SUPPORTED_PROVIDER_STRATEGIES = {"explicit", "priority", "random"}
 SUPPORTED_OUTPUT_FORMATS = {"mp3", "wav"}
 SUPPORTED_TEXT_FIELDS = {"persian", "english", "french", "target"}
@@ -83,6 +83,13 @@ def _validate_providers_config(providers_config: dict[str, Any]) -> None:
         voices = provider_config.get("voices", {})
         if voices is not None and not isinstance(voices, dict):
             raise ConfigError(f"Provider {name} voices must be a mapping when provided.")
+        if provider_type == "piper" and bool(provider_config.get("enabled", False)):
+            model_path = provider_config.get("model_path")
+            config_path = provider_config.get("config_path")
+            if not isinstance(model_path, str) or not model_path.strip():
+                raise ConfigError(f"Provider {name} must define model_path before it can be enabled.")
+            if not isinstance(config_path, str) or not config_path.strip():
+                raise ConfigError(f"Provider {name} must define config_path before it can be enabled.")
         if bool(provider_config.get("enabled", False)):
             enabled_count += 1
     if enabled_count == 0:

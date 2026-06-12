@@ -4,6 +4,7 @@ import sqlite3
 import pytest
 
 from echolingua.core.config import load_config
+from echolingua.core.errors import ProviderError
 from echolingua.pipeline.runner import PipelineRunner
 
 
@@ -104,3 +105,34 @@ def test_plan_summary_provider_override_uses_requested_provider(tmp_path, monkey
     assert summary["provider_policy"]["strategy"] == "explicit"
     assert summary["provider_policy"]["explicit_provider"] == "edge"
     assert summary["selected_providers"] == ["edge"]
+
+
+def test_list_providers_includes_piper_placeholder(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    base = load_config()
+    config = type(base)(
+        root_dir=tmp_path,
+        default=base.default,
+        providers=base.providers,
+        recipes=base.recipes,
+    )
+    rows = PipelineRunner(config).list_providers("tts")
+    names = {row["name"]: row for row in rows}
+    assert "piper" in names
+    assert names["piper"]["provider_type"] == "piper"
+    assert names["piper"]["enabled"] is False
+
+
+def test_provider_test_piper_fails_clearly(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    monkeypatch.setattr("echolingua.providers.tts.piper.PiperTTSProvider._runtime_available", lambda self: False)
+    base = load_config()
+    config = type(base)(
+        root_dir=tmp_path,
+        default=base.default,
+        providers=base.providers,
+        recipes=base.recipes,
+    )
+    runner = PipelineRunner(config)
+    with pytest.raises(ProviderError, match="Piper runtime is not available"):
+        runner.test_provider("piper")

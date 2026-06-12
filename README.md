@@ -27,6 +27,7 @@ Current TTS providers:
 
 - `FakeTTSProvider`: deterministic offline audio for tests and local development
 - `EdgeTTSProvider`: optional `edge-tts` provider
+- `PiperTTSProvider`: Phase 6 placeholder for future real local/offline TTS using Piper/Wyoming Piper
 
 AJIL integration remains a future placeholder under `echolingua/ai_gateway/`.
 
@@ -71,6 +72,13 @@ Important default paths:
 - outputs: `outputs/`
 - logs: `logs/events.jsonl`
 - cache: `storage/tts_cache/`
+
+Current Piper placeholder paths in `config/providers.yaml`:
+
+- `tts.piper.model_path`
+- `tts.piper.config_path`
+
+These are intentionally placeholders in Phase 6 and do not trigger model download or local runtime setup by themselves.
 
 ## CSV format
 
@@ -183,7 +191,10 @@ Provider diagnostics:
 echolingua providers list
 echolingua providers test fake
 echolingua providers test edge
+echolingua providers test piper
 ```
+
+`providers test piper` is expected to fail clearly for now unless you later wire a real Piper runtime into EchoLingua.
 
 Runtime diagnostics:
 

@@ -32,6 +32,15 @@ def test_validate_app_config_rejects_invalid_segment_text_field() -> None:
         validate_app_config(config.default, config.providers, recipes)
 
 
+def test_validate_app_config_rejects_enabled_piper_without_paths() -> None:
+    config = load_config()
+    providers = deepcopy(config.providers)
+    providers["tts"]["piper"]["enabled"] = True
+    providers["tts"]["piper"]["model_path"] = ""
+    with pytest.raises(ConfigError, match="model_path"):
+        validate_app_config(config.default, providers, config.recipes)
+
+
 def test_resolve_tts_provider_policy_prefers_recipe_values() -> None:
     default = {
         "provider_policy": {

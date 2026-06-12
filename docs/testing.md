@@ -85,7 +85,17 @@ Provider diagnostics:
 echolingua providers list
 echolingua providers test fake
 echolingua providers test edge
+echolingua providers test piper
 ```
+
+Piper placeholder smoke check:
+
+```bash
+echolingua providers list
+echolingua providers test piper
+```
+
+`providers test piper` should fail clearly in Phase 6 unless you later wire a real Piper runtime into EchoLingua.
 
 Config correctness smoke checks:
 

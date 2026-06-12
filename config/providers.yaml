@@ -15,3 +15,13 @@ tts:
       fa: fa-IR-DilaraNeural
       fr: fr-FR-DeniseNeural
     default_voice: fr-FR-DeniseNeural
+  piper:
+    enabled: false
+    provider: piper
+    priority: 30
+    model_path: models/piper/fr_FR-upmc-medium.onnx
+    config_path: models/piper/fr_FR-upmc-medium.onnx.json
+    voices:
+      fr: fr_FR-upmc-medium
+      en: en_US-lessac-medium
+    default_voice: fr_FR-upmc-medium

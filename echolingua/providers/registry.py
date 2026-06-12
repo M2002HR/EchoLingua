@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 from typing import Any
 
 from echolingua.providers.tts.edge import EdgeTTSProvider
 from echolingua.providers.tts.fake import FakeTTSProvider
+from echolingua.providers.tts.piper import PiperTTSProvider
 
 
 class ProviderRegistry:
@@ -24,6 +26,12 @@ class ProviderRegistry:
 def provider_dependency_available(provider_type: str) -> bool:
     if provider_type == "edge":
         return importlib.util.find_spec("edge_tts") is not None
+    if provider_type == "piper":
+        return (
+            shutil.which("piper") is not None
+            or shutil.which("wyoming-piper") is not None
+            or importlib.util.find_spec("wyoming_piper") is not None
+        )
     return True
 
 
@@ -35,6 +43,8 @@ def _provider_from_config(name: str, config: dict[str, Any]) -> Any:
         return FakeTTSProvider(name=name, priority=priority, enabled=enabled, config=config)
     if provider_type == "edge":
         return EdgeTTSProvider(name=name, priority=priority, enabled=enabled, config=config)
+    if provider_type == "piper":
+        return PiperTTSProvider(name=name, priority=priority, enabled=enabled, config=config)
     raise KeyError(f"Unsupported provider type: {provider_type}")
 
 
