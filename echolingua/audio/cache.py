@@ -5,9 +5,12 @@ from pathlib import Path
 
 from echolingua.providers.tts.base import TTSRequest
 
+CACHE_SCHEMA_VERSION = "v2"
+
 
 def tts_cache_key(provider: str, request: TTSRequest) -> str:
     raw = "|".join([
+        CACHE_SCHEMA_VERSION,
         provider,
         request.text,
         request.voice,
