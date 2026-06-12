@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from echolingua.audio.simple_audio import get_audio_segment
 from echolingua.core.errors import ProviderError
@@ -17,16 +17,28 @@ from echolingua.storage.repositories import StorageRepositories
 
 
 class AudioBuilder:
-    def __init__(self, selector: ProviderSelector, cache_dir: Path, repositories: StorageRepositories | None = None) -> None:
+    def __init__(
+        self,
+        selector: ProviderSelector,
+        cache_dir: Path,
+        repositories: StorageRepositories | None = None,
+        progress_callback: Callable[[str, str], None] | None = None,
+    ) -> None:
         self.selector = selector
         self.cache_dir = cache_dir
         self.repositories = repositories
+        self.progress_callback = progress_callback
 
     def build(self, plan: AudioPlan, output_path: Path, output_format: str | None = None) -> dict[str, Any]:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         combined = AudioSegment.empty()
         rendered_segments: list[dict[str, Any]] = []
+        total_segments = len(plan.segments)
         for segment in plan.segments:
+            self._notify_progress(
+                "rendering_segments",
+                f"Rendering segment {segment.sequence}/{total_segments} for sentence {segment.sentence_id}",
+            )
             if segment.kind == "silence":
                 duration = int(segment.duration_ms or 0)
                 combined += AudioSegment.silent(duration=duration)
@@ -42,6 +54,7 @@ class AudioBuilder:
                 "cache_key": tts_cache_key(provider_name, self._request(segment)),
                 "cached": cached,
             })
+        self._notify_progress("merging_audio", f"Merging {total_segments} segments into {output_path.name}")
         self._export_audio(combined, output_path, output_format or plan.output_format)
         return {"path": str(output_path), "duration_ms": len(combined), "segments": rendered_segments}
 
@@ -91,3 +104,7 @@ class AudioBuilder:
                 if not self.selector.policy.allow_fallback_on_error:
                     raise
         raise ProviderError(f"All TTS providers failed: {last_error}")
+
+    def _notify_progress(self, stage: str, message: str) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(stage, message)

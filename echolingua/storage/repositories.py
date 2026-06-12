@@ -62,26 +62,61 @@ class StorageRepositories:
         with self.db.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO jobs(job_id, recipe_name, status, created_at, completed_at, error_message)
-                VALUES(?, ?, 'running', ?, NULL, NULL)
+                INSERT INTO jobs(
+                  job_id, recipe_name, status, created_at, completed_at, error_message,
+                  total_steps, completed_steps, current_stage, current_message
+                )
+                VALUES(?, ?, 'running', ?, NULL, NULL, 0, 0, 'created', 'Job created')
                 ON CONFLICT(job_id) DO UPDATE SET recipe_name=excluded.recipe_name, status='running',
-                  created_at=excluded.created_at, completed_at=NULL, error_message=NULL
+                  created_at=excluded.created_at, completed_at=NULL, error_message=NULL,
+                  total_steps=0, completed_steps=0, current_stage='created', current_message='Job created'
                 """,
                 (job_id, recipe_name, _utc_now()),
             )
 
-    def complete_job(self, job_id: str) -> None:
+    def complete_job(self, job_id: str, total_steps: int | None = None) -> None:
         with self.db.connect() as conn:
             conn.execute(
-                "UPDATE jobs SET status='completed', completed_at=?, error_message=NULL WHERE job_id=?",
-                (_utc_now(), job_id),
+                """
+                UPDATE jobs
+                SET status='completed', completed_at=?, error_message=NULL,
+                    current_stage='finished', current_message='Generation complete',
+                    total_steps=COALESCE(?, total_steps),
+                    completed_steps=COALESCE(?, completed_steps)
+                WHERE job_id=?
+                """,
+                (_utc_now(), total_steps, total_steps, job_id),
             )
 
     def fail_job(self, job_id: str, error_message: str) -> None:
         with self.db.connect() as conn:
             conn.execute(
-                "UPDATE jobs SET status='failed', completed_at=?, error_message=? WHERE job_id=?",
-                (_utc_now(), error_message, job_id),
+                """
+                UPDATE jobs
+                SET status='failed', completed_at=?, error_message=?,
+                    current_stage='failed', current_message=?
+                WHERE job_id=?
+                """,
+                (_utc_now(), error_message, error_message, job_id),
+            )
+
+    def update_job_progress(
+        self,
+        job_id: str,
+        stage: str,
+        message: str,
+        completed_steps: int,
+        total_steps: int,
+        status: str = "running",
+    ) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status=?, current_stage=?, current_message=?, completed_steps=?, total_steps=?
+                WHERE job_id=?
+                """,
+                (status, stage, message, completed_steps, total_steps, job_id),
             )
 
     def record_event(self, job_id: str, event_name: str, payload: dict[str, Any]) -> None:

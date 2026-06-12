@@ -7,12 +7,13 @@ from echolingua.audio.builder import AudioBuilder
 from echolingua.core.config import AppConfig
 from echolingua.core.errors import ProviderError, ValidationError
 from echolingua.core.logging import JsonlLogger
+from echolingua.core.progress import JobProgress, NullProgressReporter, ProgressReporter
 from echolingua.pipeline.manifest import write_manifest
 from echolingua.providers.registry import build_provider, build_registry, list_provider_configs
 from echolingua.providers.selector import ProviderSelectionPolicy, ProviderSelector
 from echolingua.recipes.loader import get_recipe
 from echolingua.recipes.planner import AudioPlan, AudioPlanBuilder
-from echolingua.sentences.loader import load_sentences, load_sentences_with_report
+from echolingua.sentences.loader import load_sentences_with_report
 from echolingua.sentences.repository import SentenceRepository
 from echolingua.sentences.validator import SentenceValidationReport
 from echolingua.storage.db import Database
@@ -123,32 +124,100 @@ class PipelineRunner:
         output_path: Path | None = None,
         from_sentence_id: str | None = None,
         to_sentence_id: str | None = None,
+        progress_reporter: ProgressReporter | None = None,
     ) -> dict:
-        plan = self.build_plan(job_id, csv_path, recipe_name, from_sentence_id, to_sentence_id)
         self.repositories.create_job(job_id, recipe_name)
-        self.repositories.record_event(
-            job_id,
-            "plan_built",
-            {"segment_count": len(plan.segments), "recipe_name": recipe_name, "plan": json.dumps(plan.to_dict(), ensure_ascii=False)},
-        )
-        self.logger.event("plan_built", job_id, recipe_name=recipe_name, segment_count=len(plan.segments))
-        selector = self._selector()
-        output = output_path or (self.config.output_dir / f"{job_id}_{recipe_name}.{plan.output_format}")
-        output_format = output.suffix.lstrip(".") or plan.output_format
-        builder = AudioBuilder(selector=selector, cache_dir=self.config.tts_cache_dir, repositories=self.repositories)
+        reporter = progress_reporter or NullProgressReporter()
+        completed_steps = 0
+        total_steps = 7
+        start = JobProgress(stage="created", message="Job created", completed_steps=0, total_steps=total_steps)
+        reporter.start(start)
+
+        def emit_progress(
+            stage: str,
+            message: str,
+            *,
+            advance: int = 1,
+            status: str = "running",
+            total_override: int | None = None,
+        ) -> JobProgress:
+            nonlocal completed_steps, total_steps
+            if total_override is not None:
+                total_steps = total_override
+            completed_steps = min(total_steps, completed_steps + advance)
+            progress = JobProgress(
+                stage=stage,
+                message=message,
+                completed_steps=completed_steps,
+                total_steps=total_steps,
+                status=status,
+            )
+            self.repositories.update_job_progress(job_id, stage, message, completed_steps, total_steps, status=status)
+            self.repositories.record_event(job_id, "job_progress", progress.to_dict())
+            self.logger.event("job_progress", job_id, **progress.to_dict())
+            reporter.update(progress)
+            return progress
+
         try:
+            emit_progress("loading_csv", f"Loading {csv_path.name}")
+            sentences, report = load_sentences_with_report(csv_path)
+            emit_progress("validating", f"Validated {report.total_rows} rows")
+            if not report.is_valid:
+                if report.issues:
+                    raise ValidationError(report.issues[0].message)
+                raise ValidationError("CSV validation failed.")
+            filtered = self._filter_sentences(sentences, from_sentence_id, to_sentence_id)
+            SentenceRepository(self.db).upsert_many(filtered)
+            recipe = get_recipe(self.config.recipes, recipe_name)
+            plan = AudioPlanBuilder().build(
+                job_id,
+                recipe,
+                filtered,
+                source_csv_path=str(csv_path),
+                target_language="fr",
+                target_column="french",
+            )
+            emit_progress("building_plan", f"Built plan with {len(plan.segments)} segments", total_override=len(plan.segments) + 7)
+            self.repositories.record_event(
+                job_id,
+                "plan_built",
+                {"segment_count": len(plan.segments), "recipe_name": recipe_name, "plan": json.dumps(plan.to_dict(), ensure_ascii=False)},
+            )
+            self.logger.event("plan_built", job_id, recipe_name=recipe_name, segment_count=len(plan.segments))
+            selector = self._selector()
+            output = output_path or (self.config.output_dir / f"{job_id}_{recipe_name}.{plan.output_format}")
+            output_format = output.suffix.lstrip(".") or plan.output_format
+            builder = AudioBuilder(
+                selector=selector,
+                cache_dir=self.config.tts_cache_dir,
+                repositories=self.repositories,
+                progress_callback=lambda stage, message: emit_progress(stage, message),
+            )
             output_info = builder.build(plan, output, output_format=output_format)
+            emit_progress("saving_manifest", f"Writing manifest for {output.name}")
             manifest_path = output.with_suffix(output.suffix + ".manifest.json")
             manifest = write_manifest(plan, output_info, manifest_path)
+            emit_progress("saving_records", f"Recording output metadata for {output.name}")
             self.repositories.record_audio_output(job_id, output, manifest_path, output_info["duration_ms"])
             self.repositories.record_event(job_id, "audio_generated", {"output": str(output), "manifest": str(manifest_path)})
-            self.repositories.complete_job(job_id)
+            finished = emit_progress("finished", "Generation complete", status="completed")
+            self.repositories.complete_job(job_id, total_steps=finished.total_steps)
             self.logger.event("audio_generated", job_id, output=str(output), manifest=str(manifest_path))
+            reporter.stop(finished)
             return {"plan": plan, "output": output_info, "manifest_path": manifest_path, "manifest": manifest}
         except Exception as exc:
             self.repositories.record_event(job_id, "job_failed", {"error": str(exc)})
             self.repositories.fail_job(job_id, str(exc))
             self.logger.event("job_failed", job_id, error=str(exc))
+            reporter.stop(
+                JobProgress(
+                    stage="failed",
+                    message=str(exc),
+                    completed_steps=completed_steps,
+                    total_steps=total_steps,
+                    status="failed",
+                )
+            )
             raise
 
     def _load_filtered_sentences(
@@ -157,7 +226,19 @@ class PipelineRunner:
         from_sentence_id: str | None,
         to_sentence_id: str | None,
     ) -> list:
-        sentences = load_sentences(csv_path)
+        sentences, report = load_sentences_with_report(csv_path)
+        if not report.is_valid:
+            if report.issues:
+                raise ValidationError(report.issues[0].message)
+            raise ValidationError("CSV validation failed.")
+        return self._filter_sentences(sentences, from_sentence_id, to_sentence_id)
+
+    def _filter_sentences(
+        self,
+        sentences: list,
+        from_sentence_id: str | None,
+        to_sentence_id: str | None,
+    ) -> list:
         if from_sentence_id is None and to_sentence_id is None:
             return sentences
         sentence_ids = [sentence.id for sentence in sentences]

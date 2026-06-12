@@ -40,6 +40,7 @@ else:
 
 from echolingua.core.config import load_config
 from echolingua.core.errors import EchoLinguaError
+from echolingua.core.progress import build_progress_reporter
 from echolingua.pipeline.jobs import new_job_id
 from echolingua.pipeline.runner import PipelineRunner
 
@@ -129,6 +130,7 @@ def generate(
     to_sentence_id: Optional[str] = typer.Option(None, "--to", help="Inclusive ending sentence id"),
     output: Optional[Path] = typer.Option(None, help="Output audio path"),
     job_id: Optional[str] = typer.Option(None, help="Existing job id or generated if omitted"),
+    no_progress: bool = typer.Option(False, "--no-progress", help="Disable progress display"),
 ) -> None:
     def _action() -> None:
         result = PipelineRunner(load_config()).generate(
@@ -138,6 +140,7 @@ def generate(
             output,
             from_sentence_id=from_sentence_id,
             to_sentence_id=to_sentence_id,
+            progress_reporter=build_progress_reporter(no_progress=no_progress),
         )
         _echo_json({"output": result["output"]["path"], "manifest": str(result["manifest_path"])})
 

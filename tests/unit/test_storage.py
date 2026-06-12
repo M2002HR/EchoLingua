@@ -29,6 +29,8 @@ def test_storage_stats_and_cache(tmp_path: Path, monkeypatch) -> None:
     repos.upsert_tts_cache(tts_cache_key("fake", request), "fake", request, output, 123)
     stats = repos.stats_summary()
     cache_stats = repos.cache_stats_summary()
+    repos.update_job_progress("job-1", "rendering_segments", "Rendering", 3, 10)
+    repos.complete_job("job-1", total_steps=10)
     assert stats.total_jobs == 1
     assert stats.successful_jobs == 0
     assert stats.total_provider_attempts == 1

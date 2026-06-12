@@ -100,3 +100,16 @@ class Database:
         with self.connect() as conn:
             for statement in SCHEMA_STATEMENTS:
                 conn.execute(statement)
+            self._ensure_job_columns(conn)
+
+    def _ensure_job_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        additions = {
+            "total_steps": "INTEGER NOT NULL DEFAULT 0",
+            "completed_steps": "INTEGER NOT NULL DEFAULT 0",
+            "current_stage": "TEXT",
+            "current_message": "TEXT",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
