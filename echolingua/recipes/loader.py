@@ -16,6 +16,7 @@ def load_recipes(config: dict[str, Any]) -> dict[str, Recipe]:
             name=name,
             description=str(data.get("description", "")),
             output_format=str(data.get("output_format", "mp3")),
+            provider_policy=data.get("provider_policy") or {},
             segments=segments,
         )
     return recipes

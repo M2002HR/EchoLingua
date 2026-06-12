@@ -80,7 +80,8 @@ class AudioBuilder:
 
     def _render_tts(self, job_id: str, segment: AudioPlanSegment) -> tuple[Path, int, str, bool]:
         last_error: Exception | None = None
-        for provider in self.selector.ordered():
+        ordered_providers = self.selector.ordered(segment.provider)
+        for provider in ordered_providers:
             request = self._request(segment)
             path = cache_path(self.cache_dir, provider.metadata.name, request)
             key = tts_cache_key(provider.metadata.name, request)

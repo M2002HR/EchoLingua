@@ -55,6 +55,16 @@ EchoLingua loads configuration from:
 3. `config/providers.yaml`
 4. `config/recipes.yaml`
 
+Configuration is validated during `load_config()`. Friendly `ConfigError` messages are raised when:
+
+- required runtime paths are missing
+- no TTS provider is enabled
+- a provider type is unsupported
+- a provider priority is not an integer
+- a recipe output format is unsupported
+- a recipe references an unknown provider
+- a TTS segment uses an unsupported `text_field`
+
 Important default paths:
 
 - database: `storage/echolingua.sqlite3`
@@ -108,6 +118,18 @@ Current TTS provider policy supports:
 - `explicit`
 - `priority`
 - `random`
+
+Provider resolution order is:
+
+1. step-level `provider`
+2. recipe-level `provider_policy.tts`
+3. global `provider_policy.tts`
+4. default provider chosen from the ordered TTS registry
+
+Language voice resolution is config-driven. If a recipe TTS step omits `voice`, EchoLingua uses:
+
+1. the provider's `voices.<language>` entry when present
+2. otherwise the provider `default_voice`
 
 Fallback behavior is controlled by:
 

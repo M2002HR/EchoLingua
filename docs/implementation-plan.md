@@ -1580,6 +1580,25 @@ Acceptance:
 
 Provider selection behavior is tested and documented.
 
+Current implementation status:
+
+* done: config validation runs inside `load_config()`
+* done: friendly `ConfigError` messages cover invalid paths, providers, recipe formats, and unsupported segment fields
+* done: provider override order is implemented as:
+
+```text
+step-level provider
+→ recipe-level provider_policy
+→ global provider_policy
+→ default provider from the ordered enabled registry
+```
+
+* done: language voice resolution is config-driven through provider `voices.<language>` and `default_voice`
+* done: recipes remain YAML-driven and now carry `provider_policy`
+* done: tests cover recipe-policy override, step-level override, config validation failures, and voice resolution
+* note: current shipped recipes default to `fake` through recipe-level policy and rely on provider voice maps instead of hard-coded segment voices
+* note: secrets still belong in `.env`; no secrets were moved into recipe/provider YAML
+
 ## Phase 6 — Local TTS Preparation
 
 Goal:

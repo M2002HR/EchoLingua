@@ -16,6 +16,7 @@ class AudioPlanSegment:
     text_field: str | None = None
     language: str | None = None
     voice: str | None = None
+    provider: str | None = None
     duration_ms: int | None = None
     rate: str = "+0%"
     pitch: str = "+0Hz"
@@ -78,6 +79,7 @@ class AudioPlanBuilder:
                         text_field=recipe_segment.text_field,
                         language=recipe_segment.language,
                         voice=sentence.voice_hint or recipe_segment.voice,
+                        provider=recipe_segment.provider,
                         duration_ms=recipe_segment.duration_ms,
                         rate=recipe_segment.rate,
                         pitch=recipe_segment.pitch,

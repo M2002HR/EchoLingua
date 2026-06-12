@@ -12,6 +12,7 @@ def test_audio_plan_generation() -> None:
     assert plan.job_id == "job-1"
     assert plan.estimate_segment_count() == 10
     assert plan.segments[0].text == "سلام."
+    assert plan.segments[0].provider is None
     assert plan.source_csv_path == "data/sample.csv"
 
 

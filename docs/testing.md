@@ -79,6 +79,17 @@ echolingua providers test fake
 echolingua providers test edge
 ```
 
+Config correctness smoke checks:
+
+```bash
+python - <<'PY'
+from echolingua.core.config import load_config
+config = load_config()
+print(config.providers["tts"]["fake"]["voices"]["fr"])
+print(config.recipes["recipes"]["shadowing_basic"]["provider_policy"]["tts"]["default_provider"])
+PY
+```
+
 Runtime diagnostics:
 
 ```bash

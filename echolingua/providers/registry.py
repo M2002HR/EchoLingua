@@ -55,11 +55,15 @@ def list_provider_configs(providers_config: dict[str, Any], kind: str) -> list[d
     return rows
 
 
-def build_provider(providers_config: dict[str, Any], kind: str, name: str) -> Any:
+def provider_config(providers_config: dict[str, Any], kind: str, name: str) -> dict[str, Any]:
     config = (providers_config.get(kind) or {}).get(name)
     if config is None:
         raise KeyError(name)
-    return _provider_from_config(name, config)
+    return config
+
+
+def build_provider(providers_config: dict[str, Any], kind: str, name: str) -> Any:
+    return _provider_from_config(name, provider_config(providers_config, kind, name))
 
 
 def build_registry(providers_config: dict[str, Any]) -> ProviderRegistry:

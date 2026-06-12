@@ -26,6 +26,7 @@ def test_plan_summary_uses_sample_csv(tmp_path, monkeypatch) -> None:
     assert summary["tts_segment_count"] == 6
     assert summary["target_column"] == "french"
     assert summary["fields_used"] == ["english", "target"]
+    assert summary["provider_policy"]["default_provider"] == "fake"
 
 
 def test_generate_records_progress_events(tmp_path, monkeypatch) -> None:

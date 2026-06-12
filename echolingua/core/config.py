@@ -7,6 +7,7 @@ from typing import Any
 
 import importlib.util
 
+from echolingua.core.config_validation import validate_app_config
 from echolingua.core.simple_yaml import loads as simple_yaml_loads
 
 if importlib.util.find_spec("dotenv") is not None:
@@ -52,9 +53,13 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 def load_config(root_dir: Path | None = None) -> AppConfig:
     root = (root_dir or Path.cwd()).resolve()
     load_dotenv(root / ".env")
+    default = _read_yaml(root / "config" / "default.yaml")
+    providers = _read_yaml(root / "config" / "providers.yaml")
+    recipes = _read_yaml(root / "config" / "recipes.yaml")
+    validate_app_config(default, providers, recipes)
     return AppConfig(
         root_dir=root,
-        default=_read_yaml(root / "config" / "default.yaml"),
-        providers=_read_yaml(root / "config" / "providers.yaml"),
-        recipes=_read_yaml(root / "config" / "recipes.yaml"),
+        default=default,
+        providers=providers,
+        recipes=recipes,
     )

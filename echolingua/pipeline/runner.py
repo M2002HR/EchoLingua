@@ -5,14 +5,15 @@ from pathlib import Path
 
 from echolingua.audio.builder import AudioBuilder
 from echolingua.core.config import AppConfig
+from echolingua.core.config_validation import resolve_tts_provider_policy, resolve_voice
 from echolingua.core.errors import ProviderError, ValidationError
 from echolingua.core.logging import JsonlLogger
 from echolingua.core.progress import JobProgress, NullProgressReporter, ProgressReporter
 from echolingua.pipeline.manifest import write_manifest
-from echolingua.providers.registry import build_provider, build_registry, list_provider_configs
+from echolingua.providers.registry import build_provider, build_registry, list_provider_configs, provider_config
 from echolingua.providers.selector import ProviderSelectionPolicy, ProviderSelector
 from echolingua.recipes.loader import get_recipe
-from echolingua.recipes.planner import AudioPlan, AudioPlanBuilder
+from echolingua.recipes.planner import AudioPlan, AudioPlanBuilder, AudioPlanSegment
 from echolingua.sentences.loader import load_sentences_with_report
 from echolingua.sentences.repository import SentenceRepository
 from echolingua.sentences.validator import SentenceValidationReport
@@ -44,13 +45,16 @@ class PipelineRunner:
         sentences = self._load_filtered_sentences(csv_path, from_sentence_id, to_sentence_id)
         SentenceRepository(self.db).upsert_many(sentences)
         recipe = get_recipe(self.config.recipes, recipe_name)
-        return AudioPlanBuilder().build(
-            job_id,
-            recipe,
-            sentences,
-            source_csv_path=str(csv_path),
-            target_language="fr",
-            target_column="french",
+        return self._apply_provider_defaults(
+            AudioPlanBuilder().build(
+                job_id,
+                recipe,
+                sentences,
+                source_csv_path=str(csv_path),
+                target_language="fr",
+                target_column="french",
+            ),
+            recipe_name,
         )
 
     def build_plan_summary(
@@ -62,11 +66,11 @@ class PipelineRunner:
         to_sentence_id: str | None = None,
     ) -> dict[str, object]:
         plan = self.build_plan(job_id, csv_path, recipe_name, from_sentence_id, to_sentence_id)
-        policy = self._provider_policy()
-        providers = [provider.metadata.name for provider in self._selector().ordered()]
+        policy = self._provider_policy(recipe_name)
+        providers = [provider.metadata.name for provider in self._selector(recipe_name).ordered()]
         tts_segments = sum(1 for segment in plan.segments if segment.kind == "tts")
         silence_segments = sum(1 for segment in plan.segments if segment.kind == "silence")
-        sentence_ids = list({segment.sentence_id for segment in plan.segments})
+        sentence_ids = list(dict.fromkeys(segment.sentence_id for segment in plan.segments))
         return {
             "job_id": plan.job_id,
             "recipe": plan.recipe_name,
@@ -80,6 +84,7 @@ class PipelineRunner:
                 "strategy": policy.strategy,
                 "explicit_provider": policy.explicit_provider,
                 "allow_fallback_on_error": policy.allow_fallback_on_error,
+                "default_provider": policy.default_provider,
             },
             "selected_providers": providers,
             "estimated_calls": tts_segments,
@@ -169,13 +174,16 @@ class PipelineRunner:
             filtered = self._filter_sentences(sentences, from_sentence_id, to_sentence_id)
             SentenceRepository(self.db).upsert_many(filtered)
             recipe = get_recipe(self.config.recipes, recipe_name)
-            plan = AudioPlanBuilder().build(
-                job_id,
-                recipe,
-                filtered,
-                source_csv_path=str(csv_path),
-                target_language="fr",
-                target_column="french",
+            plan = self._apply_provider_defaults(
+                AudioPlanBuilder().build(
+                    job_id,
+                    recipe,
+                    filtered,
+                    source_csv_path=str(csv_path),
+                    target_language="fr",
+                    target_column="french",
+                ),
+                recipe_name,
             )
             emit_progress("building_plan", f"Built plan with {len(plan.segments)} segments", total_override=len(plan.segments) + 7)
             self.repositories.record_event(
@@ -184,7 +192,7 @@ class PipelineRunner:
                 {"segment_count": len(plan.segments), "recipe_name": recipe_name, "plan": json.dumps(plan.to_dict(), ensure_ascii=False)},
             )
             self.logger.event("plan_built", job_id, recipe_name=recipe_name, segment_count=len(plan.segments))
-            selector = self._selector()
+            selector = self._selector(recipe_name)
             output = output_path or (self.config.output_dir / f"{job_id}_{recipe_name}.{plan.output_format}")
             output_format = output.suffix.lstrip(".") or plan.output_format
             builder = AudioBuilder(
@@ -287,9 +295,10 @@ class PipelineRunner:
                     target_language="fr",
                     target_column="french",
                 )
+                plan = self._apply_provider_defaults(plan, recipe_name)
                 output_path = output_dir / f"{index:03d}_{self._safe_filename_part(sentence.id)}_{recipe_name}.{output_format}"
                 builder = AudioBuilder(
-                    selector=self._selector(),
+                    selector=self._selector(recipe_name),
                     cache_dir=self.config.tts_cache_dir,
                     repositories=self.repositories,
                     progress_callback=lambda stage, message: emit_progress(stage, message),
@@ -383,12 +392,53 @@ class PipelineRunner:
             raise ValidationError("No enabled sentences matched the requested --from/--to range.")
         return filtered
 
-    def _provider_policy(self) -> ProviderSelectionPolicy:
-        return ProviderSelectionPolicy.from_config(self.config.default.get("provider_policy", {}).get("tts", {}))
+    def _provider_policy(self, recipe_name: str | None = None) -> ProviderSelectionPolicy:
+        recipe_policy: dict[str, object] | None = None
+        if recipe_name is not None:
+            recipe = get_recipe(self.config.recipes, recipe_name)
+            recipe_policy = recipe.provider_policy
+        return ProviderSelectionPolicy.from_config(resolve_tts_provider_policy(self.config.default, recipe_policy))
 
-    def _selector(self) -> ProviderSelector:
+    def _selector(self, recipe_name: str | None = None) -> ProviderSelector:
         registry = build_registry(self.config.providers)
-        return ProviderSelector(registry.list("tts"), self._provider_policy())
+        return ProviderSelector(registry.list("tts"), self._provider_policy(recipe_name))
+
+    def _apply_provider_defaults(self, plan: AudioPlan, recipe_name: str) -> AudioPlan:
+        selector = self._selector(recipe_name)
+        default_provider_name = selector.ordered()[0].metadata.name
+        updated_segments: list[AudioPlanSegment] = []
+        for segment in plan.segments:
+            if segment.kind != "tts":
+                updated_segments.append(segment)
+                continue
+            provider_name = segment.provider or default_provider_name
+            provider_settings = provider_config(self.config.providers, "tts", provider_name)
+            updated_segments.append(
+                AudioPlanSegment(
+                    kind=segment.kind,
+                    sentence_id=segment.sentence_id,
+                    text=segment.text,
+                    text_field=segment.text_field,
+                    language=segment.language,
+                    voice=resolve_voice(provider_settings, segment.language, segment.voice),
+                    provider=provider_name,
+                    duration_ms=segment.duration_ms,
+                    rate=segment.rate,
+                    pitch=segment.pitch,
+                    volume=segment.volume,
+                    sequence=segment.sequence,
+                )
+            )
+        return AudioPlan(
+            job_id=plan.job_id,
+            recipe_name=plan.recipe_name,
+            output_format=plan.output_format,
+            target_language=plan.target_language,
+            target_column=plan.target_column,
+            source_csv_path=plan.source_csv_path,
+            selected_sentence_ids=plan.selected_sentence_ids,
+            segments=updated_segments,
+        )
 
     def _safe_filename_part(self, value: str) -> str:
         cleaned = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in value.strip())
