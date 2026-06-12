@@ -11,8 +11,8 @@ from echolingua.providers.tts.base import TTSRequest, TTSResult
 
 
 class FakeTTSProvider:
-    def __init__(self, name: str = "fake", priority: int = 10, config: dict | None = None) -> None:
-        self.metadata = ProviderMetadata(name=name, kind="tts", priority=priority, enabled=True, config=config or {})
+    def __init__(self, name: str = "fake", priority: int = 10, enabled: bool = True, config: dict | None = None) -> None:
+        self.metadata = ProviderMetadata(name=name, kind="tts", priority=priority, enabled=enabled, config=config or {})
 
     def synthesize(self, request: TTSRequest, output_path: Path) -> TTSResult:
         output_path.parent.mkdir(parents=True, exist_ok=True)

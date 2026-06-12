@@ -7,7 +7,7 @@ name = "echolingua"
 version = "0.1.0"
 description = "Provider-based language-learning audio pipeline"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
   "typer>=0.12",
   "PyYAML>=6.0",

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from echolingua.audio.simple_audio import get_audio_segment
+from echolingua.core.errors import ProviderError
 
 AudioSegment = get_audio_segment()
 
@@ -21,7 +22,7 @@ class AudioBuilder:
         self.cache_dir = cache_dir
         self.repositories = repositories
 
-    def build(self, plan: AudioPlan, output_path: Path) -> dict[str, Any]:
+    def build(self, plan: AudioPlan, output_path: Path, output_format: str | None = None) -> dict[str, Any]:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         combined = AudioSegment.empty()
         rendered_segments: list[dict[str, Any]] = []
@@ -41,8 +42,18 @@ class AudioBuilder:
                 "cache_key": tts_cache_key(provider_name, self._request(segment)),
                 "cached": cached,
             })
-        combined.export(output_path, format=plan.output_format)
+        self._export_audio(combined, output_path, output_format or plan.output_format)
         return {"path": str(output_path), "duration_ms": len(combined), "segments": rendered_segments}
+
+    def _export_audio(self, combined: Any, output_path: Path, output_format: str) -> None:
+        try:
+            combined.export(output_path, format=output_format)
+        except Exception as exc:
+            if output_format.lower() == "mp3":
+                raise ProviderError(
+                    "MP3 export is unavailable in this environment. Use a WAV output path for guaranteed offline generation."
+                ) from exc
+            raise
 
     def _request(self, segment: AudioPlanSegment) -> TTSRequest:
         return TTSRequest(
@@ -79,4 +90,4 @@ class AudioBuilder:
                     self.repositories.record_provider_attempt(job_id, provider.metadata.name, "tts", "error", str(exc))
                 if not self.selector.policy.allow_fallback_on_error:
                     raise
-        raise RuntimeError(f"All TTS providers failed: {last_error}")
+        raise ProviderError(f"All TTS providers failed: {last_error}")

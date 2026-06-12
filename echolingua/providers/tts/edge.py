@@ -10,8 +10,8 @@ from echolingua.providers.tts.base import TTSRequest, TTSResult
 
 
 class EdgeTTSProvider:
-    def __init__(self, name: str = "edge", priority: int = 20, config: dict | None = None) -> None:
-        self.metadata = ProviderMetadata(name=name, kind="tts", priority=priority, enabled=True, config=config or {})
+    def __init__(self, name: str = "edge", priority: int = 20, enabled: bool = True, config: dict | None = None) -> None:
+        self.metadata = ProviderMetadata(name=name, kind="tts", priority=priority, enabled=enabled, config=config or {})
 
     def synthesize(self, request: TTSRequest, output_path: Path) -> TTSResult:
         if importlib.util.find_spec("edge_tts") is None:

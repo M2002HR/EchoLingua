@@ -28,6 +28,8 @@ class SimpleAudioSegment:
             return cls(int(frames * 1000 / rate))
 
     def export(self, path: Path, format: str = "wav") -> None:
+        if format.lower() != "wav":
+            raise ValueError(f"SimpleAudioSegment only supports wav export, not {format}")
         path.parent.mkdir(parents=True, exist_ok=True)
         frames = int(self.duration_ms * FRAME_RATE / 1000)
         with wave.open(str(path), "wb") as handle:
