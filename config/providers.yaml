@@ -1,0 +1,17 @@
+tts:
+  fake:
+    enabled: true
+    provider: fake
+    priority: 10
+    voices:
+      fa: fake-fa
+      fr: fake-fr
+    default_voice: fake-neutral
+  edge:
+    enabled: false
+    provider: edge
+    priority: 20
+    voices:
+      fa: fa-IR-DilaraNeural
+      fr: fr-FR-DeniseNeural
+    default_voice: fr-FR-DeniseNeural

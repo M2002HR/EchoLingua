@@ -1,0 +1,13 @@
+app:
+  name: EchoLingua
+  environment: development
+paths:
+  database: storage/echolingua.sqlite3
+  outputs: outputs
+  logs: logs
+  tts_cache: storage/tts_cache
+provider_policy:
+  tts:
+    strategy: priority
+    explicit_provider: null
+    allow_fallback_on_error: true
