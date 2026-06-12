@@ -1,6 +1,8 @@
 from pathlib import Path
 import sqlite3
 
+import pytest
+
 from echolingua.core.config import load_config
 from echolingua.pipeline.runner import PipelineRunner
 
@@ -79,3 +81,26 @@ def test_generate_sentence_files_creates_one_file_per_sentence(tmp_path, monkeyp
     assert Path(files[1]["output"]).exists()
     assert Path(files[2]["output"]).exists()
     assert Path(files[0]["manifest"]).exists()
+
+
+def test_plan_summary_provider_override_uses_requested_provider(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    base = load_config()
+    config = type(base)(
+        root_dir=tmp_path,
+        default=base.default,
+        providers=base.providers,
+        recipes=base.recipes,
+    )
+    runner = PipelineRunner(config)
+    summary = runner.build_plan_summary(
+        "job-edge-1",
+        Path("/home/mhr/Code/EchoLingua/data/sample.csv"),
+        "shadowing_basic",
+        from_sentence_id="1",
+        to_sentence_id="1",
+        provider_name="edge",
+    )
+    assert summary["provider_policy"]["strategy"] == "explicit"
+    assert summary["provider_policy"]["explicit_provider"] == "edge"
+    assert summary["selected_providers"] == ["edge"]

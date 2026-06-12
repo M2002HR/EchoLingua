@@ -106,6 +106,7 @@ def dry_run(
     recipe: str = typer.Option("shadowing_basic", help="Recipe name"),
     from_sentence_id: Optional[str] = typer.Option(None, "--from", help="Inclusive starting sentence id"),
     to_sentence_id: Optional[str] = typer.Option(None, "--to", help="Inclusive ending sentence id"),
+    provider: Optional[str] = typer.Option(None, "--provider", help="Override TTS provider for this run"),
     job_id: Optional[str] = typer.Option(None, help="Existing job id or generated if omitted"),
 ) -> None:
     def _action() -> None:
@@ -116,6 +117,7 @@ def dry_run(
             recipe,
             from_sentence_id=from_sentence_id,
             to_sentence_id=to_sentence_id,
+            provider_name=provider,
         )
         _echo_json(summary)
 
@@ -128,6 +130,7 @@ def generate(
     recipe: str = typer.Option("shadowing_basic", help="Recipe name"),
     from_sentence_id: Optional[str] = typer.Option(None, "--from", help="Inclusive starting sentence id"),
     to_sentence_id: Optional[str] = typer.Option(None, "--to", help="Inclusive ending sentence id"),
+    provider: Optional[str] = typer.Option(None, "--provider", help="Override TTS provider for this run"),
     output: Optional[Path] = typer.Option(None, help="Output audio path"),
     job_id: Optional[str] = typer.Option(None, help="Existing job id or generated if omitted"),
     no_progress: bool = typer.Option(False, "--no-progress", help="Disable progress display"),
@@ -140,6 +143,7 @@ def generate(
             output,
             from_sentence_id=from_sentence_id,
             to_sentence_id=to_sentence_id,
+            provider_name=provider,
             progress_reporter=build_progress_reporter(no_progress=no_progress),
         )
         _echo_json({"output": result["output"]["path"], "manifest": str(result["manifest_path"])})
@@ -154,6 +158,7 @@ def generate_folder(
     recipe: str = typer.Option("shadowing_basic", help="Recipe name"),
     from_sentence_id: Optional[str] = typer.Option(None, "--from", help="Inclusive starting sentence id"),
     to_sentence_id: Optional[str] = typer.Option(None, "--to", help="Inclusive ending sentence id"),
+    provider: Optional[str] = typer.Option(None, "--provider", help="Override TTS provider for this run"),
     output_format: str = typer.Option("wav", help="Output audio format for each sentence file"),
     job_id: Optional[str] = typer.Option(None, help="Existing job id or generated if omitted"),
     no_progress: bool = typer.Option(False, "--no-progress", help="Disable progress display"),
@@ -167,6 +172,7 @@ def generate_folder(
             output_format=output_format,
             from_sentence_id=from_sentence_id,
             to_sentence_id=to_sentence_id,
+            provider_name=provider,
             progress_reporter=build_progress_reporter(no_progress=no_progress),
         )
         _echo_json(

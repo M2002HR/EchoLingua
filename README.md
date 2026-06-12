@@ -161,6 +161,14 @@ echolingua generate data/sample.csv --recipe shadowing_basic --from 1 --to 5 --o
 echolingua generate data/sample.csv --recipe english_then_target --from 1 --to 5 --output outputs/english_then_french_fake.wav
 ```
 
+Force a specific provider for a run:
+
+```bash
+echolingua dry-run data/sample.csv --recipe shadowing_basic --from 1 --to 3 --provider edge
+echolingua generate data/sample.csv --recipe shadowing_basic --from 1 --to 3 --provider edge --output outputs/edge_french.wav
+echolingua generate-folder data/sample.csv outputs/edge_sentence_files --recipe shadowing_basic --from 1 --to 3 --provider edge --output-format wav
+```
+
 WAV is the guaranteed offline format. MP3 depends on local export tooling support.
 
 Generate one file per sentence into a folder:

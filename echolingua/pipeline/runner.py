@@ -41,6 +41,7 @@ class PipelineRunner:
         recipe_name: str,
         from_sentence_id: str | None = None,
         to_sentence_id: str | None = None,
+        provider_name: str | None = None,
     ) -> AudioPlan:
         sentences = self._load_filtered_sentences(csv_path, from_sentence_id, to_sentence_id)
         SentenceRepository(self.db).upsert_many(sentences)
@@ -55,6 +56,7 @@ class PipelineRunner:
                 target_column="french",
             ),
             recipe_name,
+            provider_name=provider_name,
         )
 
     def build_plan_summary(
@@ -64,10 +66,11 @@ class PipelineRunner:
         recipe_name: str,
         from_sentence_id: str | None = None,
         to_sentence_id: str | None = None,
+        provider_name: str | None = None,
     ) -> dict[str, object]:
-        plan = self.build_plan(job_id, csv_path, recipe_name, from_sentence_id, to_sentence_id)
-        policy = self._provider_policy(recipe_name)
-        providers = [provider.metadata.name for provider in self._selector(recipe_name).ordered()]
+        plan = self.build_plan(job_id, csv_path, recipe_name, from_sentence_id, to_sentence_id, provider_name=provider_name)
+        policy = self._provider_policy(recipe_name, provider_name=provider_name)
+        providers = [provider.metadata.name for provider in self._selector(recipe_name, provider_name=provider_name).ordered()]
         tts_segments = sum(1 for segment in plan.segments if segment.kind == "tts")
         silence_segments = sum(1 for segment in plan.segments if segment.kind == "silence")
         sentence_ids = list(dict.fromkeys(segment.sentence_id for segment in plan.segments))
@@ -129,6 +132,7 @@ class PipelineRunner:
         output_path: Path | None = None,
         from_sentence_id: str | None = None,
         to_sentence_id: str | None = None,
+        provider_name: str | None = None,
         progress_reporter: ProgressReporter | None = None,
     ) -> dict:
         self.repositories.create_job(job_id, recipe_name)
@@ -184,6 +188,7 @@ class PipelineRunner:
                     target_column="french",
                 ),
                 recipe_name,
+                provider_name=provider_name,
             )
             emit_progress("building_plan", f"Built plan with {len(plan.segments)} segments", total_override=len(plan.segments) + 7)
             self.repositories.record_event(
@@ -192,7 +197,7 @@ class PipelineRunner:
                 {"segment_count": len(plan.segments), "recipe_name": recipe_name, "plan": json.dumps(plan.to_dict(), ensure_ascii=False)},
             )
             self.logger.event("plan_built", job_id, recipe_name=recipe_name, segment_count=len(plan.segments))
-            selector = self._selector(recipe_name)
+            selector = self._selector(recipe_name, provider_name=provider_name)
             output = output_path or (self.config.output_dir / f"{job_id}_{recipe_name}.{plan.output_format}")
             output_format = output.suffix.lstrip(".") or plan.output_format
             builder = AudioBuilder(
@@ -237,6 +242,7 @@ class PipelineRunner:
         output_format: str = "wav",
         from_sentence_id: str | None = None,
         to_sentence_id: str | None = None,
+        provider_name: str | None = None,
         progress_reporter: ProgressReporter | None = None,
     ) -> dict[str, object]:
         self.repositories.create_job(job_id, recipe_name)
@@ -295,10 +301,10 @@ class PipelineRunner:
                     target_language="fr",
                     target_column="french",
                 )
-                plan = self._apply_provider_defaults(plan, recipe_name)
+                plan = self._apply_provider_defaults(plan, recipe_name, provider_name=provider_name)
                 output_path = output_dir / f"{index:03d}_{self._safe_filename_part(sentence.id)}_{recipe_name}.{output_format}"
                 builder = AudioBuilder(
-                    selector=self._selector(recipe_name),
+                    selector=self._selector(recipe_name, provider_name=provider_name),
                     cache_dir=self.config.tts_cache_dir,
                     repositories=self.repositories,
                     progress_callback=lambda stage, message: emit_progress(stage, message),
@@ -392,19 +398,31 @@ class PipelineRunner:
             raise ValidationError("No enabled sentences matched the requested --from/--to range.")
         return filtered
 
-    def _provider_policy(self, recipe_name: str | None = None) -> ProviderSelectionPolicy:
+    def _provider_policy(self, recipe_name: str | None = None, provider_name: str | None = None) -> ProviderSelectionPolicy:
         recipe_policy: dict[str, object] | None = None
         if recipe_name is not None:
             recipe = get_recipe(self.config.recipes, recipe_name)
             recipe_policy = recipe.provider_policy
-        return ProviderSelectionPolicy.from_config(resolve_tts_provider_policy(self.config.default, recipe_policy))
+        merged = resolve_tts_provider_policy(self.config.default, recipe_policy)
+        if provider_name:
+            merged["strategy"] = "explicit"
+            merged["explicit_provider"] = provider_name
+            merged["default_provider"] = provider_name
+        return ProviderSelectionPolicy.from_config(merged)
 
-    def _selector(self, recipe_name: str | None = None) -> ProviderSelector:
+    def _selector(self, recipe_name: str | None = None, provider_name: str | None = None) -> ProviderSelector:
+        if provider_name is not None:
+            provider = build_provider(self.config.providers, "tts", provider_name)
+            return ProviderSelector(
+                [provider],
+                self._provider_policy(recipe_name, provider_name=provider_name),
+                include_disabled=True,
+            )
         registry = build_registry(self.config.providers)
-        return ProviderSelector(registry.list("tts"), self._provider_policy(recipe_name))
+        return ProviderSelector(registry.list("tts"), self._provider_policy(recipe_name, provider_name=provider_name))
 
-    def _apply_provider_defaults(self, plan: AudioPlan, recipe_name: str) -> AudioPlan:
-        selector = self._selector(recipe_name)
+    def _apply_provider_defaults(self, plan: AudioPlan, recipe_name: str, provider_name: str | None = None) -> AudioPlan:
+        selector = self._selector(recipe_name, provider_name=provider_name)
         default_provider_name = selector.ordered()[0].metadata.name
         updated_segments: list[AudioPlanSegment] = []
         for segment in plan.segments:

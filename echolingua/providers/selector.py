@@ -25,8 +25,8 @@ class ProviderSelectionPolicy:
 
 
 class ProviderSelector:
-    def __init__(self, providers: list[Any], policy: ProviderSelectionPolicy) -> None:
-        self.providers = [provider for provider in providers if provider.metadata.enabled]
+    def __init__(self, providers: list[Any], policy: ProviderSelectionPolicy, include_disabled: bool = False) -> None:
+        self.providers = list(providers) if include_disabled else [provider for provider in providers if provider.metadata.enabled]
         self.policy = policy
 
     def ordered(self, step_provider: str | None = None) -> list[Any]:

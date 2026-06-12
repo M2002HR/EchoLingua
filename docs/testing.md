@@ -69,6 +69,14 @@ Generate one file per sentence into a target folder:
 echolingua generate-folder data/sample.csv outputs/sentence_files --recipe shadowing_basic --from 1 --to 5
 ```
 
+Real Edge French smoke test:
+
+```bash
+echolingua providers test edge --text "Bonjour tout le monde"
+echolingua dry-run data/sample.csv --recipe shadowing_basic --from 1 --to 3 --provider edge
+echolingua generate data/sample.csv --recipe shadowing_basic --from 1 --to 3 --provider edge --output outputs/edge_french.wav --no-progress
+```
+
 MP3 output is best-effort. WAV is the guaranteed offline fallback when local export tooling is limited.
 
 Provider diagnostics:
