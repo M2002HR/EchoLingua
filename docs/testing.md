@@ -86,6 +86,7 @@ echolingua providers list
 echolingua providers test fake
 echolingua providers test edge
 echolingua providers test piper
+echolingua providers test ajil
 ```
 
 Piper placeholder smoke check:
@@ -96,6 +97,7 @@ echolingua providers test piper
 ```
 
 `providers test piper` should fail clearly in Phase 6 unless you later wire a real Piper runtime into EchoLingua.
+`providers test ajil` should fail clearly in Phase 7 unless you later wire a real AJIL runtime into EchoLingua.
 
 Config correctness smoke checks:
 

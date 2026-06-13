@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+from pathlib import Path
 import shutil
 from typing import Any
 
+from echolingua.providers.tts.ajil import AJIL_SUBMODULE_PATH, AjilTTSProvider
 from echolingua.providers.tts.edge import EdgeTTSProvider
 from echolingua.providers.tts.fake import FakeTTSProvider
 from echolingua.providers.tts.piper import PiperTTSProvider
@@ -32,6 +34,8 @@ def provider_dependency_available(provider_type: str) -> bool:
             or shutil.which("wyoming-piper") is not None
             or importlib.util.find_spec("wyoming_piper") is not None
         )
+    if provider_type == "ajil":
+        return Path(AJIL_SUBMODULE_PATH).exists()
     return True
 
 
@@ -45,6 +49,8 @@ def _provider_from_config(name: str, config: dict[str, Any]) -> Any:
         return EdgeTTSProvider(name=name, priority=priority, enabled=enabled, config=config)
     if provider_type == "piper":
         return PiperTTSProvider(name=name, priority=priority, enabled=enabled, config=config)
+    if provider_type == "ajil":
+        return AjilTTSProvider(name=name, priority=priority, enabled=enabled, config=config)
     raise KeyError(f"Unsupported provider type: {provider_type}")
 
 

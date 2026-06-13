@@ -28,8 +28,17 @@ Current TTS providers:
 - `FakeTTSProvider`: deterministic offline audio for tests and local development
 - `EdgeTTSProvider`: optional `edge-tts` provider
 - `PiperTTSProvider`: Phase 6 placeholder for future real local/offline TTS using Piper/Wyoming Piper
+- `AjilTTSProvider`: Phase 7 placeholder for future AJIL Gateway-backed TTS
 
 AJIL integration remains a future placeholder under `echolingua/ai_gateway/`.
+
+Current AJIL preparation includes:
+
+- placeholder `AjilGatewayClient`
+- placeholder `AjilLLMProvider`
+- placeholder `AjilTTSProvider`
+- config mapping into `UAG_*` environment variables
+- documented future submodule target: `vendor/Ajil_Unified_AI_Gateway/`
 
 ## Setup
 
@@ -192,9 +201,11 @@ echolingua providers list
 echolingua providers test fake
 echolingua providers test edge
 echolingua providers test piper
+echolingua providers test ajil
 ```
 
 `providers test piper` is expected to fail clearly for now unless you later wire a real Piper runtime into EchoLingua.
+`providers test ajil` is also expected to fail clearly in Phase 7 until AJIL runtime integration is implemented.
 
 Runtime diagnostics:
 

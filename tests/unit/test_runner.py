@@ -107,7 +107,7 @@ def test_plan_summary_provider_override_uses_requested_provider(tmp_path, monkey
     assert summary["selected_providers"] == ["edge"]
 
 
-def test_list_providers_includes_piper_placeholder(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_list_providers_include_placeholder_backends(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
     base = load_config()
     config = type(base)(
@@ -119,8 +119,11 @@ def test_list_providers_includes_piper_placeholder(tmp_path, monkeypatch: pytest
     rows = PipelineRunner(config).list_providers("tts")
     names = {row["name"]: row for row in rows}
     assert "piper" in names
+    assert "ajil" in names
     assert names["piper"]["provider_type"] == "piper"
+    assert names["ajil"]["provider_type"] == "ajil"
     assert names["piper"]["enabled"] is False
+    assert names["ajil"]["enabled"] is False
 
 
 def test_provider_test_piper_fails_clearly(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -136,3 +139,17 @@ def test_provider_test_piper_fails_clearly(tmp_path, monkeypatch: pytest.MonkeyP
     runner = PipelineRunner(config)
     with pytest.raises(ProviderError, match="Piper runtime is not available"):
         runner.test_provider("piper")
+
+
+def test_provider_test_ajil_fails_clearly(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    base = load_config()
+    config = type(base)(
+        root_dir=tmp_path,
+        default=base.default,
+        providers=base.providers,
+        recipes=base.recipes,
+    )
+    runner = PipelineRunner(config)
+    with pytest.raises(ProviderError, match="AjilTTSProvider is a Phase 7 placeholder"):
+        runner.test_provider("ajil")

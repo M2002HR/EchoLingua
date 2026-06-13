@@ -1660,6 +1660,17 @@ Acceptance:
 
 Interfaces exist, docs are clear, no full AJIL runtime required yet.
 
+Current implementation status:
+
+* done: confirmed official AJIL repository URL is `https://github.com/M2002HR/Ajil_Unified_AI_Gateway.git`
+* done: preserved the planned submodule target `vendor/Ajil_Unified_AI_Gateway/`
+* done: added placeholder `AjilGatewayClient`, `AjilLLMProvider`, and `AjilTTSProvider`
+* done: added disabled `ajil` provider config placeholder with `base_url`, route metadata, and voices
+* done: added AJIL-aware config validation for enabled-provider basics
+* done: mapped EchoLingua-owned config into a concrete `UAG_*` env payload through `echolingua.ai_gateway.config_mapper`
+* done: `providers list` now reports `ajil`, and `providers test ajil` fails clearly with placeholder guidance
+* note: no real AJIL submodule checkout, live gateway calls, or end-to-end AJIL synthesis/completion are implemented in this phase
+
 ## Phase 8 — Future API/Dashboard Preparation
 
 Do not build full dashboard yet.

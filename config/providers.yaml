@@ -25,3 +25,13 @@ tts:
       fr: fr_FR-upmc-medium
       en: en_US-lessac-medium
     default_voice: fr_FR-upmc-medium
+  ajil:
+    enabled: false
+    provider: ajil
+    priority: 40
+    base_url: http://127.0.0.1:8090
+    route: /v1/tts
+    voices:
+      fr: ajil-fr-default
+      en: ajil-en-default
+    default_voice: ajil-fr-default

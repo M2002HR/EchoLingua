@@ -5,7 +5,7 @@ from typing import Any
 
 from echolingua.core.errors import ConfigError
 
-SUPPORTED_PROVIDER_TYPES = {"fake", "edge", "piper"}
+SUPPORTED_PROVIDER_TYPES = {"fake", "edge", "piper", "ajil"}
 SUPPORTED_PROVIDER_STRATEGIES = {"explicit", "priority", "random"}
 SUPPORTED_OUTPUT_FORMATS = {"mp3", "wav"}
 SUPPORTED_TEXT_FIELDS = {"persian", "english", "french", "target"}
@@ -90,6 +90,10 @@ def _validate_providers_config(providers_config: dict[str, Any]) -> None:
                 raise ConfigError(f"Provider {name} must define model_path before it can be enabled.")
             if not isinstance(config_path, str) or not config_path.strip():
                 raise ConfigError(f"Provider {name} must define config_path before it can be enabled.")
+        if provider_type == "ajil" and bool(provider_config.get("enabled", False)):
+            base_url = provider_config.get("base_url")
+            if not isinstance(base_url, str) or not base_url.strip():
+                raise ConfigError(f"Provider {name} must define base_url before it can be enabled.")
         if bool(provider_config.get("enabled", False)):
             enabled_count += 1
     if enabled_count == 0:
