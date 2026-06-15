@@ -41,6 +41,14 @@ def test_validate_app_config_rejects_enabled_piper_without_paths() -> None:
         validate_app_config(config.default, providers, config.recipes)
 
 
+def test_validate_app_config_rejects_word_pause_without_split_words() -> None:
+    config = load_config()
+    recipes = deepcopy(config.recipes)
+    recipes["recipes"]["shadowing_basic"]["segments"][0]["word_pause_ms"] = 500
+    with pytest.raises(ConfigError, match="word_pause_ms without split_words=true"):
+        validate_app_config(config.default, config.providers, recipes)
+
+
 def test_resolve_tts_provider_policy_prefers_recipe_values() -> None:
     default = {
         "provider_policy": {

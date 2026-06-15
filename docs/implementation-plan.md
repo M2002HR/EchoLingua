@@ -1671,6 +1671,14 @@ Current implementation status:
 * done: `providers list` now reports `ajil`, and `providers test ajil` fails clearly with placeholder guidance
 * note: no real AJIL submodule checkout, live gateway calls, or end-to-end AJIL synthesis/completion are implemented in this phase
 
+Current implementation status beyond Phase 7:
+
+* done: recipe TTS segments now support config-driven `repeat`, `pause_after_ms`, `split_words`, `word_pause_ms`, and `delimiter_pattern`
+* done: added `persian_prompt_french_ladder` recipe for practical Persian prompt plus multi-pass French playback
+* done: recipe expansion supports French word-by-word rendering with silence inserted between generated word segments
+* done: Edge voice config now includes commented male/female options for Persian, French, and English
+* done: unit tests cover word-by-word plan expansion, recipe loading, summary counts, and config validation for word-pause misuse
+
 ## Phase 8 — Future API/Dashboard Preparation
 
 Do not build full dashboard yet.

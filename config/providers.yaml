@@ -11,9 +11,35 @@ tts:
     enabled: false
     provider: edge
     priority: 20
+    # Useful Edge voice options you can switch between in recipes:
+    # Persian male-ish alternatives:
+    #   fa-IR-FaridNeural
+    # Persian female alternatives:
+    #   fa-IR-DilaraNeural
+    # French male alternatives:
+    #   fr-FR-HenriNeural
+    #   fr-CA-ThierryNeural
+    # French female alternatives:
+    #   fr-FR-DeniseNeural
+    #   fr-FR-EloiseNeural
+    #   fr-CA-SylvieNeural
+    # English male alternatives:
+    #   en-US-ChristopherNeural
+    #   en-GB-RyanNeural
+    # English female alternatives:
+    #   en-US-AriaNeural
+    #   en-US-JennyNeural
+    #   en-GB-SoniaNeural
     voices:
       fa: fa-IR-DilaraNeural
+      fa_male: fa-IR-FaridNeural
+      fa_female: fa-IR-DilaraNeural
       fr: fr-FR-DeniseNeural
+      fr_male: fr-FR-HenriNeural
+      fr_female: fr-FR-DeniseNeural
+      en: en-US-JennyNeural
+      en_male: en-US-ChristopherNeural
+      en_female: en-US-JennyNeural
     default_voice: fr-FR-DeniseNeural
   piper:
     enabled: false

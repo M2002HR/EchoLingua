@@ -12,6 +12,11 @@ class RecipeSegment:
     voice: str | None = None
     provider: str | None = None
     duration_ms: int | None = None
+    pause_after_ms: int | None = None
+    repeat: int = 1
+    split_words: bool = False
+    word_pause_ms: int | None = None
+    delimiter_pattern: str | None = None
     rate: str = "+0%"
     pitch: str = "+0Hz"
     volume: str = "+0%"
@@ -25,6 +30,11 @@ class RecipeSegment:
             voice=data.get("voice"),
             provider=data.get("provider"),
             duration_ms=data.get("duration_ms"),
+            pause_after_ms=data.get("pause_after_ms"),
+            repeat=int(data.get("repeat", 1)),
+            split_words=bool(data.get("split_words", False)),
+            word_pause_ms=data.get("word_pause_ms"),
+            delimiter_pattern=data.get("delimiter_pattern"),
             rate=str(data.get("rate", "+0%")),
             pitch=str(data.get("pitch", "+0Hz")),
             volume=str(data.get("volume", "+0%")),

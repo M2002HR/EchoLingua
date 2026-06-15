@@ -147,6 +147,23 @@ def _validate_recipe_segment(
     provider_name = segment.get("provider")
     if provider_name is not None:
         _ensure_provider_exists(str(provider_name), providers_config, f"Recipe {recipe_name} segment {index}")
+    repeat = segment.get("repeat", 1)
+    if not isinstance(repeat, int) or repeat < 1:
+        raise ConfigError(f"Recipe {recipe_name} tts segment {index} repeat must be an integer >= 1.")
+    pause_after_ms = segment.get("pause_after_ms")
+    if pause_after_ms is not None and (not isinstance(pause_after_ms, int) or pause_after_ms < 0):
+        raise ConfigError(f"Recipe {recipe_name} tts segment {index} pause_after_ms must be a non-negative integer.")
+    split_words = segment.get("split_words", False)
+    if not isinstance(split_words, bool):
+        raise ConfigError(f"Recipe {recipe_name} tts segment {index} split_words must be boolean.")
+    word_pause_ms = segment.get("word_pause_ms")
+    if word_pause_ms is not None and (not isinstance(word_pause_ms, int) or word_pause_ms < 0):
+        raise ConfigError(f"Recipe {recipe_name} tts segment {index} word_pause_ms must be a non-negative integer.")
+    if word_pause_ms is not None and not split_words:
+        raise ConfigError(f"Recipe {recipe_name} tts segment {index} uses word_pause_ms without split_words=true.")
+    delimiter_pattern = segment.get("delimiter_pattern")
+    if delimiter_pattern is not None and not isinstance(delimiter_pattern, str):
+        raise ConfigError(f"Recipe {recipe_name} tts segment {index} delimiter_pattern must be a string.")
 
 
 def _validate_tts_policy(policy: dict[str, Any], providers_config: dict[str, Any], label: str) -> None:

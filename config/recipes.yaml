@@ -65,3 +65,46 @@ recipes:
         language: fr
       - kind: silence
         duration_ms: 3000
+  persian_prompt_french_ladder:
+    description: "Persian prompt, French normal male, French word-by-word with pauses, French slower, then French normal."
+    output_format: mp3
+    provider_policy:
+      tts:
+        strategy: explicit
+        explicit_provider: edge
+        default_provider: edge
+        allow_fallback_on_error: false
+    segments:
+      - kind: tts
+        text_field: persian
+        language: fa
+        voice: fa-IR-DilaraNeural
+      - kind: silence
+        duration_ms: 3000
+      - kind: tts
+        text_field: french
+        language: fr
+        voice: fr-FR-HenriNeural
+        rate: "+0%"
+      - kind: silence
+        duration_ms: 3000
+      - kind: tts
+        text_field: french
+        language: fr
+        voice: fr-FR-HenriNeural
+        split_words: true
+        word_pause_ms: 900
+      - kind: silence
+        duration_ms: 3000
+      - kind: tts
+        text_field: french
+        language: fr
+        voice: fr-FR-HenriNeural
+        rate: "-20%"
+      - kind: silence
+        duration_ms: 3000
+      - kind: tts
+        text_field: french
+        language: fr
+        voice: fr-FR-HenriNeural
+        rate: "+0%"

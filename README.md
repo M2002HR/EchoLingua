@@ -120,6 +120,7 @@ Current recipes:
 - `shadowing_basic`
 - `active_recall`
 - `english_then_target`
+- `persian_prompt_french_ladder`
 
 Recipes can reference sentence fields such as:
 
@@ -127,6 +128,21 @@ Recipes can reference sentence fields such as:
 - `english`
 - `french`
 - `target` aliasing the current target column
+
+Recipe TTS segments can also be configured with:
+
+- `repeat`
+- `pause_after_ms`
+- `split_words`
+- `word_pause_ms`
+- `delimiter_pattern`
+
+This allows config-driven patterns like:
+
+- normal full-sentence playback
+- repeated playback with pauses
+- word-by-word playback with silence between words
+- different voices and rates for each pass
 
 ## Provider policy
 
@@ -185,6 +201,21 @@ echolingua dry-run data/sample.csv --recipe shadowing_basic --from 1 --to 3 --pr
 echolingua generate data/sample.csv --recipe shadowing_basic --from 1 --to 3 --provider edge --output outputs/edge_french.wav
 echolingua generate-folder data/sample.csv outputs/edge_sentence_files --recipe shadowing_basic --from 1 --to 3 --provider edge --output-format wav
 ```
+
+Practical Persian-to-French ladder recipe with Edge:
+
+```bash
+echolingua dry-run data/sample.csv --recipe persian_prompt_french_ladder --from 1 --to 3 --provider edge
+echolingua generate-folder data/sample.csv outputs/persian_french_ladder --recipe persian_prompt_french_ladder --from 1 --to 100 --provider edge --output-format wav --no-progress
+```
+
+`persian_prompt_french_ladder` currently does this, fully from config:
+
+1. Persian sentence once at normal speed
+2. French once at normal speed with a male voice
+3. French word-by-word with configurable pauses between words
+4. French once at `-20%` rate
+5. French once again at normal speed
 
 WAV is the guaranteed offline format. MP3 depends on local export tooling support.
 

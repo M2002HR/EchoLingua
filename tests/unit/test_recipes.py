@@ -7,6 +7,8 @@ def test_recipe_loading() -> None:
     recipes = load_recipes(config.recipes)
     assert "shadowing_basic" in recipes
     assert "english_then_target" in recipes
+    assert "persian_prompt_french_ladder" in recipes
     assert get_recipe(config.recipes, "active_recall").segments[1].duration_ms == 2500
     assert get_recipe(config.recipes, "english_then_target").segments[0].text_field == "english"
     assert get_recipe(config.recipes, "shadowing_basic").provider_policy["tts"]["default_provider"] == "fake"
+    assert get_recipe(config.recipes, "persian_prompt_french_ladder").segments[4].rate == "+0%"

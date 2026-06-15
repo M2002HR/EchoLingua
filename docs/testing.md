@@ -54,6 +54,7 @@ Dry-run:
 ```bash
 echolingua dry-run data/sample.csv --recipe shadowing_basic --from 1 --to 5
 echolingua dry-run data/sample.csv --recipe english_then_target --from 1 --to 5
+echolingua dry-run data/sample.csv --recipe persian_prompt_french_ladder --from 1 --to 3 --provider edge
 ```
 
 Generate offline fake audio:
@@ -67,6 +68,7 @@ Generate one file per sentence into a target folder:
 
 ```bash
 echolingua generate-folder data/sample.csv outputs/sentence_files --recipe shadowing_basic --from 1 --to 5
+echolingua generate-folder data/sample.csv outputs/persian_french_ladder --recipe persian_prompt_french_ladder --from 1 --to 100 --provider edge --output-format wav --no-progress
 ```
 
 Real Edge French smoke test:
@@ -107,6 +109,7 @@ from echolingua.core.config import load_config
 config = load_config()
 print(config.providers["tts"]["fake"]["voices"]["fr"])
 print(config.recipes["recipes"]["shadowing_basic"]["provider_policy"]["tts"]["default_provider"])
+print(config.recipes["recipes"]["persian_prompt_french_ladder"]["segments"][4]["split_words"])
 PY
 ```
 

@@ -153,3 +153,27 @@ def test_provider_test_ajil_fails_clearly(tmp_path, monkeypatch: pytest.MonkeyPa
     runner = PipelineRunner(config)
     with pytest.raises(ProviderError, match="AjilTTSProvider is a Phase 7 placeholder"):
         runner.test_provider("ajil")
+
+
+def test_plan_summary_for_persian_prompt_french_ladder(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    base = load_config()
+    config = type(base)(
+        root_dir=tmp_path,
+        default=base.default,
+        providers=base.providers,
+        recipes=base.recipes,
+    )
+    runner = PipelineRunner(config)
+    summary = runner.build_plan_summary(
+        "job-ladder-1",
+        Path("/home/mhr/Code/EchoLingua/data/sample.csv"),
+        "persian_prompt_french_ladder",
+        from_sentence_id="2",
+        to_sentence_id="2",
+        provider_name="edge",
+    )
+    assert summary["sentence_count"] == 1
+    assert summary["tts_segment_count"] == 7
+    assert summary["silence_segment_count"] == 6
+    assert summary["provider_policy"]["explicit_provider"] == "edge"
