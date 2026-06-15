@@ -56,6 +56,10 @@ class AppConfig:
     def telegram_bot_token(self) -> str:
         return os.getenv("ECHOLINGUA_TELEGRAM_BOT_TOKEN", "").strip()
 
+    @property
+    def telegram_bot_proxy_url(self) -> str:
+        return os.getenv("ECHOLINGUA_TELEGRAM_BOT_PROXY_URL", "").strip()
+
 
 def _read_yaml(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:

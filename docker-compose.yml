@@ -14,6 +14,7 @@ services:
     command: ["python", "-m", "echolingua.telegram_bot.app"]
     env_file:
       - .env
+    network_mode: host
     volumes:
       - ./storage:/app/storage
       - ./outputs:/app/outputs

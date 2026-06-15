@@ -28,7 +28,10 @@ def build_application() -> Application:
     config = load_config()
     if not config.telegram_bot_token:
         raise RuntimeError("ECHOLINGUA_TELEGRAM_BOT_TOKEN is not configured.")
-    request = HTTPXRequest(httpx_kwargs={"trust_env": False})
+    request_kwargs: dict[str, object] = {"httpx_kwargs": {"trust_env": False}}
+    if config.telegram_bot_proxy_url:
+        request_kwargs["proxy"] = config.telegram_bot_proxy_url
+    request = HTTPXRequest(**request_kwargs)
     application = (
         Application.builder()
         .token(config.telegram_bot_token)
