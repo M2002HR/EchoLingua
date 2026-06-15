@@ -121,6 +121,86 @@ echolingua cache-stats
 echolingua logs tail --lines 20
 ```
 
+## Telegram Bot Smoke Checks
+
+Bot env:
+
+```bash
+sed -n '1,200p' .env
+```
+
+Bot import checks:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+from echolingua.core.config import load_config
+from echolingua.telegram_bot.service import TelegramBotService
+
+service = TelegramBotService(load_config())
+service.ensure_user(
+    telegram_user_id=1,
+    chat_id=1,
+    username="local_test",
+    first_name="Local",
+    last_name="Tester",
+    language_code="fa",
+)
+result = service.import_csv_for_user(1, Path("data/sample.csv"), "sample.csv")
+print(len(result["imported_sentence_ids"]))
+print(service.export_user_csv(1))
+PY
+```
+
+Bot service behavior checks:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+from echolingua.core.config import load_config
+from echolingua.telegram_bot.service import TelegramBotService
+
+service = TelegramBotService(load_config())
+service.ensure_user(telegram_user_id=11, chat_id=11, username="botcheck")
+service.import_csv_for_user(11, Path("data/sample.csv"), "sample.csv")
+print(service.sentence_summary(11))
+print(service.describe_custom_recipe(11)["summary"])
+service.create_or_update_custom_recipe(11, {"pause_between_ms": 3500, "word_pause_ms": 1100})
+print(service.describe_custom_recipe(11))
+page = service.paginated_user_sentences(11, 0, page_size=5)
+print(page["page"], page["page_size"], len(page["items"]))
+PY
+```
+
+Bot startup hardening check:
+
+```bash
+python - <<'PY'
+from echolingua.telegram_bot.app import build_application
+app = build_application()
+print(type(app).__name__)
+PY
+```
+
+Bot runtime:
+
+```bash
+python -m echolingua.telegram_bot.app
+echolingua-bot
+```
+
+Docker Compose:
+
+```bash
+docker compose build
+docker compose up bot
+```
+
+Security note:
+
+- the current Telegram bot token in `.env` should be rotated after setup because it was provided directly in chat
+- CSV import currently replaces the importing user's active library with the latest enabled rows from that CSV
+
 ## Inspect generated artifacts
 
 Manifest:

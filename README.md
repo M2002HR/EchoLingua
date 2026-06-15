@@ -11,6 +11,7 @@ Version `0.1` focuses on a solid local pipeline:
 - manifest output
 - structured JSONL logs
 - SQLite stats and diagnostics
+- Telegram bot foundation for user-managed sentence/audio workflows
 
 ## Architecture
 
@@ -22,6 +23,7 @@ Current provider-oriented building blocks:
 - placeholder `LLMProvider`
 - placeholder `ExportProvider`
 - SQLite-backed storage and analytics stubs
+- Telegram bot service and UI layer
 
 Current TTS providers:
 
@@ -245,6 +247,79 @@ echolingua stats
 echolingua cache-stats
 echolingua logs tail --lines 20
 ```
+
+## Telegram Bot
+
+EchoLingua now includes a Python Telegram bot entrypoint:
+
+```bash
+echolingua-bot
+python -m echolingua.telegram_bot.app
+```
+
+Current bot capabilities:
+
+- creates a Telegram user record on `/start`
+- stores per-user settings in SQLite
+- imports CSV files into the user's sentence library and replaces that user's active library with the imported enabled rows
+- exports the user's current sentence library back to CSV
+- keeps a user-scoped sentence snapshot so one user's imported CSV does not overwrite another user's library
+- lets the user choose recipe, provider, output format, and page size
+- includes a Telegram-managed custom ladder recipe flow for prompt type, pause lengths, and French voice choice
+- generates audio for the user's sentences through the same EchoLingua pipeline
+- sends audio with Persian, English, and French captions
+
+Current bot flow highlights:
+
+- `/start`: onboarding + main menu
+- `/import_csv`: upload a CSV into the user's library
+- `/library`: paginated browsing of your sentence library, with per-sentence send/remove actions
+- `/add_sentence`: add a sentence from the shared repository by sentence id
+- `/export_csv`: export the current library
+- `/settings`: choose recipe/provider/output format
+- `/send_all`: generate and send audio files one by one
+
+Operational notes:
+
+- the bot disables `httpx` environment proxy inheritance for Telegram API calls, so it can still boot on machines with incompatible local proxy env vars
+- `telegram_custom_ladder` is generated at runtime from the user's saved bot settings and then executed through the same `PipelineRunner`
+- current custom recipe controls are focused on the practical French ladder workflow; full arbitrary recipe editing from chat is not implemented yet
+
+Bot token and directories are configured through `.env`:
+
+- `ECHOLINGUA_TELEGRAM_BOT_TOKEN`
+- `ECHOLINGUA_TELEGRAM_IMPORT_DIR`
+- `ECHOLINGUA_TELEGRAM_EXPORT_DIR`
+- `ECHOLINGUA_TELEGRAM_TEMP_AUDIO_DIR`
+
+Security note:
+
+- the current bot token was provided directly in chat and has therefore been exposed; after verification, rotate it in BotFather and update `.env`
+
+## Docker Compose
+
+Bring the CLI image and Telegram bot up with Docker Compose:
+
+```bash
+docker compose build
+docker compose up bot
+```
+
+If you only want to check that the bot process builds correctly without connecting it long-term:
+
+```bash
+python - <<'PY'
+from echolingua.telegram_bot.app import build_application
+app = build_application()
+print(type(app).__name__)
+PY
+```
+
+The compose stack mounts:
+
+- `storage/`
+- `outputs/`
+- `logs/`
 
 ## Logs, manifests, and SQLite
 

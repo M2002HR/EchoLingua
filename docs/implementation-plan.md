@@ -1679,6 +1679,18 @@ Current implementation status beyond Phase 7:
 * done: Edge voice config now includes commented male/female options for Persian, French, and English
 * done: unit tests cover word-by-word plan expansion, recipe loading, summary counts, and config validation for word-pause misuse
 
+Current implementation status beyond the original phases:
+
+* done: added a Telegram bot foundation in Python under `echolingua.telegram_bot`
+* done: Telegram user, user settings, user sentence library, and CSV import history are now persisted in SQLite
+* done: the bot service can import/export CSV, build captions, and trigger per-sentence audio generation through the shared pipeline
+* done: added `echolingua-bot` entrypoint plus `Dockerfile` and `docker-compose.yml`
+* done: Telegram startup now ignores incompatible ambient proxy env vars by building PTB requests with `trust_env=False`
+* done: imported Telegram CSV data is now stored as a user-scoped sentence snapshot so one user's library does not overwrite another user's imported content
+* done: the bot UI now includes paginated library browsing, per-sentence send/remove actions, page-size settings, and a Telegram-managed custom ladder recipe flow
+* note: full arbitrary recipe authoring from chat is still not implemented; the current in-bot recipe editor focuses on the practical ladder workflow
+* note: the Telegram bot token currently lives in `.env` for local runtime and should be rotated after verification because it was shared in chat
+
 ## Phase 8 — Future API/Dashboard Preparation
 
 Do not build full dashboard yet.
