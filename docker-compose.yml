@@ -1,0 +1,22 @@
+services:
+  app:
+    build: .
+    command: ["python", "-m", "echolingua.cli", "--help"]
+    env_file:
+      - .env
+    volumes:
+      - ./storage:/app/storage
+      - ./outputs:/app/outputs
+      - ./logs:/app/logs
+
+  bot:
+    build: .
+    command: ["python", "-m", "echolingua.telegram_bot.app"]
+    env_file:
+      - .env
+    volumes:
+      - ./storage:/app/storage
+      - ./outputs:/app/outputs
+      - ./logs:/app/logs
+
+    restart: unless-stopped
