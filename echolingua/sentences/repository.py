@@ -44,3 +44,33 @@ class SentenceRepository:
                     for s in sentences
                 ],
             )
+
+    def list_all(self) -> list[Sentence]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, persian, english, french, level, category, recommended_start, enabled,
+                       tags, notes, priority, difficulty, voice_hint, pronunciation_note
+                FROM sentences
+                ORDER BY id
+                """
+            ).fetchall()
+        return [
+            Sentence(
+                id=str(row["id"]),
+                persian=str(row["persian"]),
+                english=str(row["english"]),
+                french=str(row["french"]),
+                level=str(row["level"]),
+                category=str(row["category"]),
+                recommended_start=str(row["recommended_start"]),
+                enabled=bool(row["enabled"]),
+                tags=[tag.strip() for tag in str(row["tags"]).split(",") if tag.strip()],
+                notes=str(row["notes"]),
+                priority=int(row["priority"] or 0),
+                difficulty=int(row["difficulty"] or 0),
+                voice_hint=str(row["voice_hint"]),
+                pronunciation_note=str(row["pronunciation_note"]),
+            )
+            for row in rows
+        ]

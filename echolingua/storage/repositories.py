@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from echolingua.providers.tts.base import TTSRequest
+from echolingua.sentences.validator import Sentence
 from echolingua.storage.db import Database
 
 
@@ -54,6 +55,32 @@ class CacheStatsSummary:
             "entries_by_provider": self.entries_by_provider,
             "approx_size_bytes": self.approx_size_bytes,
         }
+
+
+@dataclass(frozen=True)
+class TelegramUserSettings:
+    telegram_user_id: int
+    selected_recipe: str
+    selected_provider: str
+    output_format: str
+    voice_overrides_json: str
+    extra_config_json: str
+
+    def voice_overrides(self) -> dict[str, Any]:
+        return json.loads(self.voice_overrides_json or "{}")
+
+    def extra_config(self) -> dict[str, Any]:
+        return json.loads(self.extra_config_json or "{}")
+
+
+@dataclass(frozen=True)
+class TelegramCsvImportRecord:
+    telegram_user_id: int
+    file_name: str
+    file_path: str
+    imported_rows: int
+    imported_sentence_ids: list[str]
+    created_at: str
 
 
 class StorageRepositories:
@@ -266,4 +293,343 @@ class StorageRepositories:
             entry_count=entry_count,
             entries_by_provider={str(row["provider_name"]): int(row["count"]) for row in provider_rows},
             approx_size_bytes=approx_size_bytes,
+        )
+
+    def upsert_telegram_user(
+        self,
+        telegram_user_id: int,
+        chat_id: int,
+        username: str = "",
+        first_name: str = "",
+        last_name: str = "",
+        language_code: str = "",
+    ) -> None:
+        now = _utc_now()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO telegram_users(
+                  telegram_user_id, username, first_name, last_name, language_code, chat_id, is_active, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, 1, ?, ?)
+                ON CONFLICT(telegram_user_id) DO UPDATE SET
+                  username=excluded.username,
+                  first_name=excluded.first_name,
+                  last_name=excluded.last_name,
+                  language_code=excluded.language_code,
+                  chat_id=excluded.chat_id,
+                  is_active=1,
+                  updated_at=excluded.updated_at
+                """,
+                (telegram_user_id, username, first_name, last_name, language_code, chat_id, now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO telegram_user_settings(
+                  telegram_user_id, selected_recipe, selected_provider, output_format,
+                  voice_overrides_json, extra_config_json, created_at, updated_at
+                )
+                VALUES(?, 'persian_prompt_french_ladder', 'edge', 'wav', '{}', '{}', ?, ?)
+                ON CONFLICT(telegram_user_id) DO NOTHING
+                """,
+                (telegram_user_id, now, now),
+            )
+
+    def get_telegram_user_settings(self, telegram_user_id: int) -> TelegramUserSettings:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT telegram_user_id, selected_recipe, selected_provider, output_format,
+                       voice_overrides_json, extra_config_json
+                FROM telegram_user_settings
+                WHERE telegram_user_id=?
+                """,
+                (telegram_user_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(telegram_user_id)
+        return TelegramUserSettings(
+            telegram_user_id=int(row["telegram_user_id"]),
+            selected_recipe=str(row["selected_recipe"]),
+            selected_provider=str(row["selected_provider"]),
+            output_format=str(row["output_format"]),
+            voice_overrides_json=str(row["voice_overrides_json"]),
+            extra_config_json=str(row["extra_config_json"]),
+        )
+
+    def update_telegram_user_settings(
+        self,
+        telegram_user_id: int,
+        *,
+        selected_recipe: str | None = None,
+        selected_provider: str | None = None,
+        output_format: str | None = None,
+        voice_overrides: dict[str, Any] | None = None,
+        extra_config: dict[str, Any] | None = None,
+    ) -> None:
+        current = self.get_telegram_user_settings(telegram_user_id)
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE telegram_user_settings
+                SET selected_recipe=?,
+                    selected_provider=?,
+                    output_format=?,
+                    voice_overrides_json=?,
+                    extra_config_json=?,
+                    updated_at=?
+                WHERE telegram_user_id=?
+                """,
+                (
+                    selected_recipe or current.selected_recipe,
+                    selected_provider or current.selected_provider,
+                    output_format or current.output_format,
+                    json.dumps(voice_overrides if voice_overrides is not None else current.voice_overrides(), ensure_ascii=False),
+                    json.dumps(extra_config if extra_config is not None else current.extra_config(), ensure_ascii=False),
+                    _utc_now(),
+                    telegram_user_id,
+                ),
+            )
+
+    def add_user_sentences(self, telegram_user_id: int, sentence_ids: list[str], source_type: str = "csv_import") -> None:
+        now = _utc_now()
+        with self.db.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO telegram_user_sentences(telegram_user_id, sentence_id, source_type, added_at)
+                VALUES(?, ?, ?, ?)
+                ON CONFLICT(telegram_user_id, sentence_id) DO UPDATE SET
+                  source_type=excluded.source_type,
+                  added_at=excluded.added_at
+                """,
+                [(telegram_user_id, sentence_id, source_type, now) for sentence_id in sentence_ids],
+            )
+
+    def replace_user_sentences(self, telegram_user_id: int, sentence_ids: list[str], source_type: str = "csv_import") -> None:
+        with self.db.connect() as conn:
+            conn.execute("DELETE FROM telegram_user_sentences WHERE telegram_user_id=?", (telegram_user_id,))
+        self.add_user_sentences(telegram_user_id, sentence_ids, source_type=source_type)
+
+    def remove_user_sentence(self, telegram_user_id: int, sentence_id: str) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                "DELETE FROM telegram_user_sentences WHERE telegram_user_id=? AND sentence_id=?",
+                (telegram_user_id, sentence_id),
+            )
+            conn.execute(
+                "DELETE FROM telegram_sentence_library WHERE telegram_user_id=? AND sentence_id=?",
+                (telegram_user_id, sentence_id),
+            )
+
+    def list_user_sentence_ids(self, telegram_user_id: int) -> list[str]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT sentence_id
+                FROM telegram_user_sentences
+                WHERE telegram_user_id=?
+                ORDER BY added_at, sentence_id
+                """,
+                (telegram_user_id,),
+            ).fetchall()
+        return [str(row["sentence_id"]) for row in rows]
+
+    def replace_telegram_sentence_library(
+        self,
+        telegram_user_id: int,
+        sentences: list[Sentence],
+        source_type: str = "csv_import",
+    ) -> None:
+        now = _utc_now()
+        with self.db.connect() as conn:
+            conn.execute("DELETE FROM telegram_sentence_library WHERE telegram_user_id=?", (telegram_user_id,))
+            conn.executemany(
+                """
+                INSERT INTO telegram_sentence_library(
+                  telegram_user_id, sentence_id, persian, english, french, level, category,
+                  recommended_start, enabled, tags, notes, priority, difficulty, voice_hint,
+                  pronunciation_note, source_type, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        telegram_user_id,
+                        sentence.id,
+                        sentence.persian,
+                        sentence.english,
+                        sentence.french,
+                        sentence.level,
+                        sentence.category,
+                        sentence.recommended_start,
+                        int(sentence.enabled),
+                        ",".join(sentence.tags),
+                        sentence.notes,
+                        sentence.priority,
+                        sentence.difficulty,
+                        sentence.voice_hint,
+                        sentence.pronunciation_note,
+                        source_type,
+                        now,
+                    )
+                    for sentence in sentences
+                ],
+            )
+
+    def upsert_telegram_sentence(self, telegram_user_id: int, sentence: Sentence, source_type: str = "manual") -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO telegram_sentence_library(
+                  telegram_user_id, sentence_id, persian, english, french, level, category,
+                  recommended_start, enabled, tags, notes, priority, difficulty, voice_hint,
+                  pronunciation_note, source_type, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(telegram_user_id, sentence_id) DO UPDATE SET
+                  persian=excluded.persian,
+                  english=excluded.english,
+                  french=excluded.french,
+                  level=excluded.level,
+                  category=excluded.category,
+                  recommended_start=excluded.recommended_start,
+                  enabled=excluded.enabled,
+                  tags=excluded.tags,
+                  notes=excluded.notes,
+                  priority=excluded.priority,
+                  difficulty=excluded.difficulty,
+                  voice_hint=excluded.voice_hint,
+                  pronunciation_note=excluded.pronunciation_note,
+                  source_type=excluded.source_type,
+                  updated_at=excluded.updated_at
+                """,
+                (
+                    telegram_user_id,
+                    sentence.id,
+                    sentence.persian,
+                    sentence.english,
+                    sentence.french,
+                    sentence.level,
+                    sentence.category,
+                    sentence.recommended_start,
+                    int(sentence.enabled),
+                    ",".join(sentence.tags),
+                    sentence.notes,
+                    sentence.priority,
+                    sentence.difficulty,
+                    sentence.voice_hint,
+                    sentence.pronunciation_note,
+                    source_type,
+                    _utc_now(),
+                ),
+            )
+
+    def get_telegram_sentence(self, telegram_user_id: int, sentence_id: str) -> Sentence | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT sentence_id, persian, english, french, level, category, recommended_start, enabled,
+                       tags, notes, priority, difficulty, voice_hint, pronunciation_note
+                FROM telegram_sentence_library
+                WHERE telegram_user_id=? AND sentence_id=?
+                """,
+                (telegram_user_id, sentence_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return Sentence(
+            id=str(row["sentence_id"]),
+            persian=str(row["persian"]),
+            english=str(row["english"]),
+            french=str(row["french"]),
+            level=str(row["level"]),
+            category=str(row["category"]),
+            recommended_start=str(row["recommended_start"]),
+            enabled=bool(row["enabled"]),
+            tags=[tag.strip() for tag in str(row["tags"]).split(",") if tag.strip()],
+            notes=str(row["notes"]),
+            priority=int(row["priority"] or 0),
+            difficulty=int(row["difficulty"] or 0),
+            voice_hint=str(row["voice_hint"]),
+            pronunciation_note=str(row["pronunciation_note"]),
+        )
+
+    def list_telegram_sentences(self, telegram_user_id: int) -> list[Sentence]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT sentence_id, persian, english, french, level, category, recommended_start, enabled,
+                       tags, notes, priority, difficulty, voice_hint, pronunciation_note
+                FROM telegram_sentence_library
+                WHERE telegram_user_id=?
+                ORDER BY CAST(sentence_id AS INTEGER), sentence_id
+                """,
+                (telegram_user_id,),
+            ).fetchall()
+        return [
+            Sentence(
+                id=str(row["sentence_id"]),
+                persian=str(row["persian"]),
+                english=str(row["english"]),
+                french=str(row["french"]),
+                level=str(row["level"]),
+                category=str(row["category"]),
+                recommended_start=str(row["recommended_start"]),
+                enabled=bool(row["enabled"]),
+                tags=[tag.strip() for tag in str(row["tags"]).split(",") if tag.strip()],
+                notes=str(row["notes"]),
+                priority=int(row["priority"] or 0),
+                difficulty=int(row["difficulty"] or 0),
+                voice_hint=str(row["voice_hint"]),
+                pronunciation_note=str(row["pronunciation_note"]),
+            )
+            for row in rows
+        ]
+
+    def record_telegram_csv_import(
+        self,
+        telegram_user_id: int,
+        file_name: str,
+        file_path: Path,
+        imported_sentence_ids: list[str],
+    ) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO telegram_csv_imports(
+                  telegram_user_id, file_name, file_path, imported_rows, imported_sentence_ids_json, created_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    telegram_user_id,
+                    file_name,
+                    str(file_path),
+                    len(imported_sentence_ids),
+                    json.dumps(imported_sentence_ids, ensure_ascii=False),
+                    _utc_now(),
+                ),
+            )
+
+    def latest_telegram_csv_import(self, telegram_user_id: int) -> TelegramCsvImportRecord | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT telegram_user_id, file_name, file_path, imported_rows, imported_sentence_ids_json, created_at
+                FROM telegram_csv_imports
+                WHERE telegram_user_id=?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (telegram_user_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return TelegramCsvImportRecord(
+            telegram_user_id=int(row["telegram_user_id"]),
+            file_name=str(row["file_name"]),
+            file_path=str(row["file_path"]),
+            imported_rows=int(row["imported_rows"]),
+            imported_sentence_ids=list(json.loads(str(row["imported_sentence_ids_json"]) or "[]")),
+            created_at=str(row["created_at"]),
         )

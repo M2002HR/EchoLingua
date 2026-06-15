@@ -13,6 +13,7 @@ dependencies = [
   "PyYAML>=6.0",
   "python-dotenv>=1.0",
   "pydub>=0.25",
+  "python-telegram-bot>=21.0",
 ]
 
 [project.optional-dependencies]
@@ -21,6 +22,7 @@ dev = ["pytest>=8.0"]
 
 [project.scripts]
 echolingua = "echolingua.cli:app"
+echolingua-bot = "echolingua.telegram_bot.app:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

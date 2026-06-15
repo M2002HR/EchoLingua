@@ -40,6 +40,22 @@ class AppConfig:
     def tts_cache_dir(self) -> Path:
         return self.root_dir / self.default["paths"].get("tts_cache", "storage/tts_cache")
 
+    @property
+    def telegram_import_dir(self) -> Path:
+        return self.root_dir / os.getenv("ECHOLINGUA_TELEGRAM_IMPORT_DIR", "storage/telegram_imports")
+
+    @property
+    def telegram_export_dir(self) -> Path:
+        return self.root_dir / os.getenv("ECHOLINGUA_TELEGRAM_EXPORT_DIR", "storage/telegram_exports")
+
+    @property
+    def telegram_temp_audio_dir(self) -> Path:
+        return self.root_dir / os.getenv("ECHOLINGUA_TELEGRAM_TEMP_AUDIO_DIR", "storage/telegram_audio")
+
+    @property
+    def telegram_bot_token(self) -> str:
+        return os.getenv("ECHOLINGUA_TELEGRAM_BOT_TOKEN", "").strip()
+
 
 def _read_yaml(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
