@@ -5,6 +5,7 @@ import importlib.util
 import json
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -50,8 +51,26 @@ class EdgeTTSProvider:
                 volume=request.volume,
             )
             await communicate.save(str(output_path))
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is None:
+            asyncio.run(_run())
+            return
+        error_box: list[BaseException] = []
 
-        asyncio.run(_run())
+        def _runner() -> None:
+            try:
+                asyncio.run(_run())
+            except BaseException as exc:  # pragma: no cover - forwarded to caller
+                error_box.append(exc)
+
+        thread = threading.Thread(target=_runner, daemon=True)
+        thread.start()
+        thread.join()
+        if error_box:
+            raise error_box[0]
 
     def _transcode_audio(self, input_path: Path, output_path: Path, output_format: str) -> None:
         ffmpeg = shutil.which("ffmpeg")
