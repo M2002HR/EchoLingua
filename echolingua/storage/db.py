@@ -147,6 +147,20 @@ SCHEMA_STATEMENTS = (
       created_at TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS telegram_user_recipes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      telegram_user_id INTEGER NOT NULL,
+      recipe_key TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      recipe_kind TEXT NOT NULL DEFAULT 'guided',
+      template_key TEXT NOT NULL DEFAULT 'ladder',
+      recipe_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(telegram_user_id, recipe_key)
+    )
+    """,
 )
 
 

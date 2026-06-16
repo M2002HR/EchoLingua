@@ -83,6 +83,21 @@ class TelegramCsvImportRecord:
     created_at: str
 
 
+@dataclass(frozen=True)
+class TelegramUserRecipe:
+    telegram_user_id: int
+    recipe_key: str
+    display_name: str
+    recipe_kind: str
+    template_key: str
+    recipe_json: str
+    created_at: str
+    updated_at: str
+
+    def recipe_data(self) -> dict[str, Any]:
+        return json.loads(self.recipe_json or "{}")
+
+
 class StorageRepositories:
     def __init__(self, db: Database) -> None:
         self.db = db
@@ -428,7 +443,12 @@ class StorageRepositories:
                 SELECT sentence_id
                 FROM telegram_user_sentences
                 WHERE telegram_user_id=?
-                ORDER BY added_at, sentence_id
+                ORDER BY
+                  CASE
+                    WHEN sentence_id GLOB '[0-9]*' THEN CAST(sentence_id AS INTEGER)
+                    ELSE 2147483647
+                  END,
+                  sentence_id
                 """,
                 (telegram_user_id,),
             ).fetchall()
@@ -586,6 +606,43 @@ class StorageRepositories:
             for row in rows
         ]
 
+    def find_telegram_sentence_by_text(self, telegram_user_id: int, target_language: str, text: str) -> Sentence | None:
+        field = {
+            "fr": "french",
+            "en": "english",
+            "fa": "persian",
+        }.get(target_language, "french")
+        normalized = text.strip().lower()
+        with self.db.connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT sentence_id, persian, english, french, level, category, recommended_start, enabled,
+                       tags, notes, priority, difficulty, voice_hint, pronunciation_note
+                FROM telegram_sentence_library
+                WHERE telegram_user_id=? AND lower(trim({field}))=?
+                LIMIT 1
+                """,
+                (telegram_user_id, normalized),
+            ).fetchone()
+        if row is None:
+            return None
+        return Sentence(
+            id=str(row["sentence_id"]),
+            persian=str(row["persian"]),
+            english=str(row["english"]),
+            french=str(row["french"]),
+            level=str(row["level"]),
+            category=str(row["category"]),
+            recommended_start=str(row["recommended_start"]),
+            enabled=bool(row["enabled"]),
+            tags=[tag.strip() for tag in str(row["tags"]).split(",") if tag.strip()],
+            notes=str(row["notes"]),
+            priority=int(row["priority"] or 0),
+            difficulty=int(row["difficulty"] or 0),
+            voice_hint=str(row["voice_hint"]),
+            pronunciation_note=str(row["pronunciation_note"]),
+        )
+
     def record_telegram_csv_import(
         self,
         telegram_user_id: int,
@@ -633,3 +690,96 @@ class StorageRepositories:
             imported_sentence_ids=list(json.loads(str(row["imported_sentence_ids_json"]) or "[]")),
             created_at=str(row["created_at"]),
         )
+
+    def upsert_telegram_user_recipe(
+        self,
+        telegram_user_id: int,
+        recipe_key: str,
+        display_name: str,
+        recipe_kind: str,
+        template_key: str,
+        recipe_data: dict[str, Any],
+    ) -> None:
+        now = _utc_now()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO telegram_user_recipes(
+                  telegram_user_id, recipe_key, display_name, recipe_kind, template_key,
+                  recipe_json, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(telegram_user_id, recipe_key) DO UPDATE SET
+                  display_name=excluded.display_name,
+                  recipe_kind=excluded.recipe_kind,
+                  template_key=excluded.template_key,
+                  recipe_json=excluded.recipe_json,
+                  updated_at=excluded.updated_at
+                """,
+                (
+                    telegram_user_id,
+                    recipe_key,
+                    display_name,
+                    recipe_kind,
+                    template_key,
+                    json.dumps(recipe_data, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+
+    def list_telegram_user_recipes(self, telegram_user_id: int) -> list[TelegramUserRecipe]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT telegram_user_id, recipe_key, display_name, recipe_kind, template_key, recipe_json, created_at, updated_at
+                FROM telegram_user_recipes
+                WHERE telegram_user_id=?
+                ORDER BY display_name, recipe_key
+                """,
+                (telegram_user_id,),
+            ).fetchall()
+        return [
+            TelegramUserRecipe(
+                telegram_user_id=int(row["telegram_user_id"]),
+                recipe_key=str(row["recipe_key"]),
+                display_name=str(row["display_name"]),
+                recipe_kind=str(row["recipe_kind"]),
+                template_key=str(row["template_key"]),
+                recipe_json=str(row["recipe_json"]),
+                created_at=str(row["created_at"]),
+                updated_at=str(row["updated_at"]),
+            )
+            for row in rows
+        ]
+
+    def get_telegram_user_recipe(self, telegram_user_id: int, recipe_key: str) -> TelegramUserRecipe | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT telegram_user_id, recipe_key, display_name, recipe_kind, template_key, recipe_json, created_at, updated_at
+                FROM telegram_user_recipes
+                WHERE telegram_user_id=? AND recipe_key=?
+                LIMIT 1
+                """,
+                (telegram_user_id, recipe_key),
+            ).fetchone()
+        if row is None:
+            return None
+        return TelegramUserRecipe(
+            telegram_user_id=int(row["telegram_user_id"]),
+            recipe_key=str(row["recipe_key"]),
+            display_name=str(row["display_name"]),
+            recipe_kind=str(row["recipe_kind"]),
+            template_key=str(row["template_key"]),
+            recipe_json=str(row["recipe_json"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+        )
+
+    def delete_telegram_user_recipe(self, telegram_user_id: int, recipe_key: str) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                "DELETE FROM telegram_user_recipes WHERE telegram_user_id=? AND recipe_key=?",
+                (telegram_user_id, recipe_key),
+            )
