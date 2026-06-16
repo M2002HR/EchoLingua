@@ -72,3 +72,65 @@ def test_storage_telegram_user_settings_and_sentence_list(tmp_path: Path, monkey
     repos.remove_user_sentence(12345, "2")
     assert repos.list_user_sentence_ids(12345) == ["1", "3"]
     repos.record_telegram_csv_import(12345, "sample.csv", tmp_path / "sample.csv", ["1", "3"])
+
+
+def test_storage_user_sentence_ids_are_sorted_numerically(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(Path(".").resolve())
+    config = load_config()
+    config = type(config)(
+        root_dir=tmp_path,
+        default=config.default,
+        providers=config.providers,
+        recipes=config.recipes,
+    )
+    db = Database(config.db_path)
+    db.initialize()
+    repos = StorageRepositories(db)
+    repos.upsert_telegram_user(
+        telegram_user_id=77,
+        chat_id=77,
+        username="sorter",
+        first_name="Sort",
+        last_name="Tester",
+        language_code="fa",
+    )
+    repos.add_user_sentences(77, ["1", "10", "100", "11", "2"])
+    assert repos.list_user_sentence_ids(77) == ["1", "2", "10", "11", "100"]
+
+
+def test_storage_telegram_user_recipes_crud(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(Path(".").resolve())
+    config = load_config()
+    config = type(config)(
+        root_dir=tmp_path,
+        default=config.default,
+        providers=config.providers,
+        recipes=config.recipes,
+    )
+    db = Database(config.db_path)
+    db.initialize()
+    repos = StorageRepositories(db)
+    repos.upsert_telegram_user(
+        telegram_user_id=88,
+        chat_id=88,
+        username="recipe_user",
+        first_name="Recipe",
+        last_name="Tester",
+        language_code="fa",
+    )
+    repos.upsert_telegram_user_recipe(
+        telegram_user_id=88,
+        recipe_key="my_recipe",
+        display_name="My Recipe",
+        recipe_kind="guided",
+        template_key="ladder",
+        recipe_data={"name": "My Recipe", "pause_between_ms": 1200},
+    )
+    listed = repos.list_telegram_user_recipes(88)
+    assert len(listed) == 1
+    assert listed[0].recipe_key == "my_recipe"
+    fetched = repos.get_telegram_user_recipe(88, "my_recipe")
+    assert fetched is not None
+    assert fetched.recipe_data()["pause_between_ms"] == 1200
+    repos.delete_telegram_user_recipe(88, "my_recipe")
+    assert repos.get_telegram_user_recipe(88, "my_recipe") is None
