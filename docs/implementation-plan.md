@@ -1686,9 +1686,17 @@ Current implementation status beyond the original phases:
 * done: the bot service can import/export CSV, build captions, and trigger per-sentence audio generation through the shared pipeline
 * done: added `echolingua-bot` entrypoint plus `Dockerfile` and `docker-compose.yml`
 * done: Telegram startup now ignores incompatible ambient proxy env vars by building PTB requests with `trust_env=False`
+* done: Telegram runtime also supports an explicit `ECHOLINGUA_TELEGRAM_BOT_PROXY_URL` for deployments that must reach the Bot API through a proxy
 * done: imported Telegram CSV data is now stored as a user-scoped sentence snapshot so one user's library does not overwrite another user's imported content
-* done: the bot UI now includes paginated library browsing, per-sentence send/remove actions, page-size settings, and a Telegram-managed custom ladder recipe flow
-* note: full arbitrary recipe authoring from chat is still not implemented; the current in-bot recipe editor focuses on the practical ladder workflow
+* done: the bot UI now includes paginated library browsing, numeric sentence ordering, per-sentence send/edit/remove actions, page-size settings, and a Telegram-managed custom ladder recipe flow
+* done: the bot now supports target-language selection beyond French and adapts runtime recipes and captions to the selected target language
+* done: practical in-bot sentence creation now works from target-language text plus Persian translation instead of only adding by shared sentence id
+* done: the in-bot recipe editor can reduce or increase silence for existing recipes and the default custom ladder pauses were shortened for a tighter listening flow
+* done: each Telegram user can now create and edit multiple personal guided recipes, stored in SQLite and resolved into runtime recipes at generation time
+* done: the Telegram bot now has a more interactive recipe-building flow that mixes buttons with focused text inputs for names and timing values
+* done: Edge TTS synthesis is now safe inside the Telegram bot event loop and no longer crashes on nested `asyncio.run()` usage
+* done: Telegram message edits now safely ignore the benign `Message is not modified` API response
+* note: full arbitrary segment-by-segment recipe authoring from chat is still not implemented; the current in-bot recipe editor focuses on practical guided ladder/listen-repeat style flows
 * note: the Telegram bot token currently lives in `.env` for local runtime and should be rotated after verification because it was shared in chat
 
 ## Phase 8 — Future API/Dashboard Preparation

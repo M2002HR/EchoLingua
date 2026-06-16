@@ -167,7 +167,31 @@ print(service.sentence_summary(11))
 print(service.describe_custom_recipe(11)["summary"])
 service.create_or_update_custom_recipe(11, {"pause_between_ms": 3500, "word_pause_ms": 1100})
 print(service.describe_custom_recipe(11))
-page = service.paginated_user_sentences(11, 0, page_size=5)
+service.set_target_language(11, "en")
+sentence = service.add_sentence_from_target_text(
+    11,
+    target_language="en",
+    target_text="Where are you going?",
+    translation_text="کجا می‌روی؟",
+)
+print(sentence.id, sentence.english, sentence.persian)
+resolved = service.resolve_recipe_for_user(11, "telegram_custom_ladder")
+print(resolved["recipe_name"], resolved["summary"])
+recipe = service.create_user_recipe(
+    11,
+    {
+        "name": "Interactive Drill",
+        "template_key": "ladder",
+        "prompt_field": "persian",
+        "pause_between_ms": 1000,
+        "word_pause_ms": 220,
+    },
+)
+print(recipe.recipe_key, recipe.display_name)
+print([item.recipe_name for item in service.available_recipes(11)])
+print(service.resolve_recipe_for_user(11, recipe.recipe_key)["recipe_name"])
+service.update_settings(11, extra_config={"target_language": "en", "page_size": 5})
+page = service.paginated_user_sentences(11, 0)
 print(page["page"], page["page_size"], len(page["items"]))
 PY
 ```
@@ -200,6 +224,7 @@ Security note:
 
 - the current Telegram bot token in `.env` should be rotated after setup because it was provided directly in chat
 - CSV import currently replaces the importing user's active library with the latest enabled rows from that CSV
+- if the deployment environment needs a Telegram proxy, set `ECHOLINGUA_TELEGRAM_BOT_PROXY_URL`
 
 ## Inspect generated artifacts
 

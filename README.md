@@ -264,30 +264,38 @@ Current bot capabilities:
 - imports CSV files into the user's sentence library and replaces that user's active library with the imported enabled rows
 - exports the user's current sentence library back to CSV
 - keeps a user-scoped sentence snapshot so one user's imported CSV does not overwrite another user's library
-- lets the user choose recipe, provider, output format, and page size
-- includes a Telegram-managed custom ladder recipe flow for prompt type, pause lengths, and French voice choice
+- lets the user choose target language, recipe, provider, output format, and page size
+- includes a Telegram-managed custom ladder recipe flow for prompt type, pause lengths, and target-language voice choice
+- lets each user create and edit multiple personal recipes alongside shared recipes through an interactive guided flow
+- supports practical text-first sentence creation and sentence editing inside Telegram
+- supports recipe-specific silence scaling for existing recipes from chat
 - generates audio for the user's sentences through the same EchoLingua pipeline
-- sends audio with Persian, English, and French captions
+- sends audio with Persian, English, and target-language-aware captions
 
 Current bot flow highlights:
 
 - `/start`: onboarding + main menu
 - `/import_csv`: upload a CSV into the user's library
-- `/library`: paginated browsing of your sentence library, with per-sentence send/remove actions
-- `/add_sentence`: add a sentence from the shared repository by sentence id
+- `/library`: paginated browsing of your sentence library, with per-sentence send/edit/remove actions
+- from the main menu or library: add a sentence by sending target-language text and then the Persian translation
+- recipe management: guided interactive recipe creation/editing with buttons plus a few targeted text inputs for names and pause values
 - `/export_csv`: export the current library
-- `/settings`: choose recipe/provider/output format
+- `/settings`: choose target language, recipe, provider, output format, page size, and custom ladder settings
 - `/send_all`: generate and send audio files one by one
 
 Operational notes:
 
 - the bot disables `httpx` environment proxy inheritance for Telegram API calls, so it can still boot on machines with incompatible local proxy env vars
+- it also supports an explicit Telegram proxy via `ECHOLINGUA_TELEGRAM_BOT_PROXY_URL`
 - `telegram_custom_ladder` is generated at runtime from the user's saved bot settings and then executed through the same `PipelineRunner`
-- current custom recipe controls are focused on the practical French ladder workflow; full arbitrary recipe editing from chat is not implemented yet
+- personal bot recipes are stored per user in SQLite and are resolved into runtime recipes just before generation
+- the current guided recipe builder focuses on practical listening/shadowing ladders rather than fully arbitrary segment-by-segment authoring
+- recipe message edits now safely ignore Telegram's `Message is not modified` error instead of crashing the bot
 
 Bot token and directories are configured through `.env`:
 
 - `ECHOLINGUA_TELEGRAM_BOT_TOKEN`
+- `ECHOLINGUA_TELEGRAM_BOT_PROXY_URL`
 - `ECHOLINGUA_TELEGRAM_IMPORT_DIR`
 - `ECHOLINGUA_TELEGRAM_EXPORT_DIR`
 - `ECHOLINGUA_TELEGRAM_TEMP_AUDIO_DIR`
