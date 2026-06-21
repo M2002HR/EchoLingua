@@ -23,3 +23,9 @@ These rules are mandatory for future work in this repository.
 - Do not stop after implementation until verification has been executed and the result is understood.
 - If verification fails, continue debugging and fixing until the system is working correctly or a real external blocker is identified.
 - Do not conclude work until you are confident the change behaves correctly.
+
+## Runtime Refresh Discipline
+
+- After completing code changes, bring up or restart the relevant local service when that is needed for the changes to actually take effect.
+- For this repository, prefer restarting the affected Docker Compose service or the directly relevant runtime entrypoint.
+- Do not assume that tests alone are sufficient when the user expects the running service to pick up the latest code.
