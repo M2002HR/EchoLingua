@@ -1,5 +1,6 @@
 from pathlib import Path
 import sqlite3
+import json
 
 import pytest
 
@@ -7,9 +8,11 @@ from echolingua.core.config import load_config
 from echolingua.core.errors import ProviderError
 from echolingua.pipeline.runner import PipelineRunner
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 def test_plan_summary_uses_sample_csv(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    monkeypatch.chdir(PROJECT_ROOT)
     base = load_config()
     config = type(base)(
         root_dir=tmp_path,
@@ -20,7 +23,7 @@ def test_plan_summary_uses_sample_csv(tmp_path, monkeypatch) -> None:
     runner = PipelineRunner(config)
     summary = runner.build_plan_summary(
         "job-1",
-        Path("/home/mhr/Code/EchoLingua/data/sample.csv"),
+        PROJECT_ROOT / "data/sample.csv",
         "english_then_target",
         from_sentence_id="1",
         to_sentence_id="2",
@@ -33,7 +36,7 @@ def test_plan_summary_uses_sample_csv(tmp_path, monkeypatch) -> None:
 
 
 def test_generate_records_progress_events(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    monkeypatch.chdir(PROJECT_ROOT)
     base = load_config()
     config = type(base)(
         root_dir=tmp_path,
@@ -44,7 +47,7 @@ def test_generate_records_progress_events(tmp_path, monkeypatch) -> None:
     runner = PipelineRunner(config)
     result = runner.generate(
         "job-progress-1",
-        Path("/home/mhr/Code/EchoLingua/data/sample.csv"),
+        PROJECT_ROOT / "data/sample.csv",
         "shadowing_basic",
         output_path=tmp_path / "progress.wav",
     )
@@ -54,10 +57,16 @@ def test_generate_records_progress_events(tmp_path, monkeypatch) -> None:
     assert stages == ["finished"]
     event_names = [row[0] for row in conn.execute("SELECT event_name FROM job_events WHERE job_id='job-progress-1'").fetchall()]
     assert "job_progress" in event_names
+    summary_path = config.log_dir / "jobs" / "job-progress-1" / "latest-summary.json"
+    assert summary_path.exists()
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["status"] == "completed"
+    assert summary["summary"]["output_path"].endswith("progress.wav")
+    assert "pipeline.render_audio" in summary["operation_stats"]
 
 
 def test_generate_sentence_files_creates_one_file_per_sentence(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    monkeypatch.chdir(PROJECT_ROOT)
     base = load_config()
     config = type(base)(
         root_dir=tmp_path,
@@ -68,7 +77,7 @@ def test_generate_sentence_files_creates_one_file_per_sentence(tmp_path, monkeyp
     runner = PipelineRunner(config)
     result = runner.generate_sentence_files(
         "job-folder-1",
-        Path("/home/mhr/Code/EchoLingua/data/sample.csv"),
+        PROJECT_ROOT / "data/sample.csv",
         "shadowing_basic",
         tmp_path / "sentence_outputs",
         output_format="wav",
@@ -82,10 +91,38 @@ def test_generate_sentence_files_creates_one_file_per_sentence(tmp_path, monkeyp
     assert Path(files[1]["output"]).exists()
     assert Path(files[2]["output"]).exists()
     assert Path(files[0]["manifest"]).exists()
+    summary = runner.latest_job_summary("job-folder-1")
+    assert summary is not None
+    assert summary["summary"]["file_count"] == 3
+    assert summary["status"] == "completed"
+
+
+def test_generate_failure_writes_trace_summary(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(PROJECT_ROOT)
+    base = load_config()
+    config = type(base)(
+        root_dir=tmp_path,
+        default=base.default,
+        providers=base.providers,
+        recipes=base.recipes,
+    )
+    runner = PipelineRunner(config)
+    with pytest.raises(Exception, match="boom"):
+        monkeypatch.setattr("echolingua.audio.builder.AudioBuilder.build", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+        runner.generate(
+            "job-failure-1",
+            PROJECT_ROOT / "data/sample.csv",
+            "shadowing_basic",
+            output_path=tmp_path / "failure.wav",
+        )
+    summary = runner.latest_job_summary("job-failure-1")
+    assert summary is not None
+    assert summary["status"] == "failed"
+    assert summary["error"]["message"] == "boom"
 
 
 def test_plan_summary_provider_override_uses_requested_provider(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    monkeypatch.chdir(PROJECT_ROOT)
     base = load_config()
     config = type(base)(
         root_dir=tmp_path,
@@ -96,7 +133,7 @@ def test_plan_summary_provider_override_uses_requested_provider(tmp_path, monkey
     runner = PipelineRunner(config)
     summary = runner.build_plan_summary(
         "job-edge-1",
-        Path("/home/mhr/Code/EchoLingua/data/sample.csv"),
+        PROJECT_ROOT / "data/sample.csv",
         "shadowing_basic",
         from_sentence_id="1",
         to_sentence_id="1",
@@ -108,7 +145,7 @@ def test_plan_summary_provider_override_uses_requested_provider(tmp_path, monkey
 
 
 def test_list_providers_include_placeholder_backends(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    monkeypatch.chdir(PROJECT_ROOT)
     base = load_config()
     config = type(base)(
         root_dir=tmp_path,
@@ -127,7 +164,7 @@ def test_list_providers_include_placeholder_backends(tmp_path, monkeypatch: pyte
 
 
 def test_provider_test_piper_fails_clearly(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    monkeypatch.chdir(PROJECT_ROOT)
     monkeypatch.setattr("echolingua.providers.tts.piper.PiperTTSProvider._runtime_available", lambda self: False)
     base = load_config()
     config = type(base)(
@@ -142,7 +179,7 @@ def test_provider_test_piper_fails_clearly(tmp_path, monkeypatch: pytest.MonkeyP
 
 
 def test_provider_test_ajil_fails_clearly(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    monkeypatch.chdir(PROJECT_ROOT)
     base = load_config()
     config = type(base)(
         root_dir=tmp_path,
@@ -156,7 +193,7 @@ def test_provider_test_ajil_fails_clearly(tmp_path, monkeypatch: pytest.MonkeyPa
 
 
 def test_plan_summary_for_persian_prompt_french_ladder(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    monkeypatch.chdir(PROJECT_ROOT)
     base = load_config()
     config = type(base)(
         root_dir=tmp_path,
@@ -167,7 +204,7 @@ def test_plan_summary_for_persian_prompt_french_ladder(tmp_path, monkeypatch: py
     runner = PipelineRunner(config)
     summary = runner.build_plan_summary(
         "job-ladder-1",
-        Path("/home/mhr/Code/EchoLingua/data/sample.csv"),
+        PROJECT_ROOT / "data/sample.csv",
         "persian_prompt_french_ladder",
         from_sentence_id="2",
         to_sentence_id="2",

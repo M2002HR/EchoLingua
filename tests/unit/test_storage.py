@@ -20,8 +20,27 @@ def test_storage_stats_and_cache(tmp_path: Path, monkeypatch) -> None:
     db.initialize()
     repos = StorageRepositories(db)
     repos.create_job("job-1", "shadowing_basic")
-    repos.record_event("job-1", "plan_built", {"segment_count": 1})
-    repos.record_provider_attempt("job-1", "fake", "tts", "success", None)
+    repos.record_event(
+        "job-1",
+        "plan_built",
+        {"segment_count": 1},
+        status="completed",
+        component="pipeline.runner",
+        operation="pipeline.build_plan",
+        duration_ms=15,
+        trace_id="trace-1",
+        span_id="span-1",
+    )
+    repos.record_provider_attempt(
+        "job-1",
+        "fake",
+        "tts",
+        "success",
+        None,
+        duration_ms=12,
+        cache_key="cache-1",
+        request_summary={"text_length": 7},
+    )
     output = tmp_path / "out.wav"
     output.write_bytes(b"123")
     repos.record_audio_output("job-1", output, tmp_path / "out.wav.manifest.json", 123)

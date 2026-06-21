@@ -8,6 +8,8 @@ from echolingua.core.config_validation import resolve_tts_provider_policy, resol
 from echolingua.core.errors import ConfigError
 from echolingua.pipeline.runner import PipelineRunner
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 def test_load_config_validates_recipe_policy() -> None:
     config = load_config()
@@ -83,7 +85,7 @@ def test_resolve_voice_uses_language_map_then_default() -> None:
 
 
 def test_runner_recipe_policy_and_voice_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    monkeypatch.chdir(PROJECT_ROOT)
     base = load_config()
     recipes = deepcopy(base.recipes)
     recipes["recipes"]["shadowing_basic"]["provider_policy"]["tts"]["strategy"] = "explicit"
@@ -98,7 +100,7 @@ def test_runner_recipe_policy_and_voice_resolution(tmp_path: Path, monkeypatch: 
     runner = PipelineRunner(config)
     plan = runner.build_plan(
         "job-policy-1",
-        Path("/home/mhr/Code/EchoLingua/data/sample.csv"),
+        PROJECT_ROOT / "data/sample.csv",
         "shadowing_basic",
         from_sentence_id="1",
         to_sentence_id="1",
@@ -108,7 +110,7 @@ def test_runner_recipe_policy_and_voice_resolution(tmp_path: Path, monkeypatch: 
     assert voices == ["fake-fa", "fake-fr", "fake-fr"]
     summary = runner.build_plan_summary(
         "job-policy-2",
-        Path("/home/mhr/Code/EchoLingua/data/sample.csv"),
+        PROJECT_ROOT / "data/sample.csv",
         "shadowing_basic",
         from_sentence_id="1",
         to_sentence_id="1",

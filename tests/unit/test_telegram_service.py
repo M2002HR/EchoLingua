@@ -3,9 +3,11 @@ from pathlib import Path
 from echolingua.core.config import load_config
 from echolingua.telegram_bot.service import TelegramBotService
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 def test_telegram_service_import_export_and_caption(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    monkeypatch.chdir(PROJECT_ROOT)
     base = load_config()
     config = type(base)(
         root_dir=tmp_path,
@@ -22,7 +24,7 @@ def test_telegram_service_import_export_and_caption(tmp_path: Path, monkeypatch)
         last_name="Demo",
         language_code="fa",
     )
-    import_result = service.import_csv_for_user(1001, Path("/home/mhr/Code/EchoLingua/data/sample.csv"), "sample.csv")
+    import_result = service.import_csv_for_user(1001, PROJECT_ROOT / "data/sample.csv", "sample.csv")
     assert len(import_result["imported_sentence_ids"]) == 100
     settings = service.get_settings(1001)
     assert settings.selected_recipe == "persian_prompt_french_ladder"
@@ -37,7 +39,7 @@ def test_telegram_service_import_export_and_caption(tmp_path: Path, monkeypatch)
 
 
 def test_telegram_service_caption_does_not_repeat_target_language(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    monkeypatch.chdir(PROJECT_ROOT)
     base = load_config()
     config = type(base)(
         root_dir=tmp_path,
@@ -54,7 +56,7 @@ def test_telegram_service_caption_does_not_repeat_target_language(tmp_path: Path
         last_name="Demo",
         language_code="fa",
     )
-    service.import_csv_for_user(1004, Path("/home/mhr/Code/EchoLingua/data/sample.csv"), "sample.csv")
+    service.import_csv_for_user(1004, PROJECT_ROOT / "data/sample.csv", "sample.csv")
     sentence = service.list_user_sentences(1004)[0]
 
     french_caption = service.build_caption(sentence, target_language="fr")
@@ -67,7 +69,7 @@ def test_telegram_service_caption_does_not_repeat_target_language(tmp_path: Path
 
 
 def test_telegram_service_custom_recipe_and_user_library_snapshot(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    monkeypatch.chdir(PROJECT_ROOT)
     base = load_config()
     config = type(base)(
         root_dir=tmp_path,
@@ -84,7 +86,7 @@ def test_telegram_service_custom_recipe_and_user_library_snapshot(tmp_path: Path
         last_name="Demo",
         language_code="fa",
     )
-    service.import_csv_for_user(1002, Path("/home/mhr/Code/EchoLingua/data/sample.csv"), "sample.csv")
+    service.import_csv_for_user(1002, PROJECT_ROOT / "data/sample.csv", "sample.csv")
 
     custom = service.create_or_update_custom_recipe(
         1002,
@@ -118,7 +120,7 @@ def test_telegram_service_custom_recipe_and_user_library_snapshot(tmp_path: Path
 
 
 def test_telegram_service_target_language_and_manual_sentence_flow(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    monkeypatch.chdir(PROJECT_ROOT)
     base = load_config()
     config = type(base)(
         root_dir=tmp_path,
@@ -156,7 +158,7 @@ def test_telegram_service_target_language_and_manual_sentence_flow(tmp_path: Pat
 
 
 def test_telegram_service_user_recipe_create_update_and_resolve(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.chdir(Path("/home/mhr/Code/EchoLingua"))
+    monkeypatch.chdir(PROJECT_ROOT)
     base = load_config()
     config = type(base)(
         root_dir=tmp_path,
