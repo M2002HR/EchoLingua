@@ -146,9 +146,10 @@ service.ensure_user(
     last_name="Tester",
     language_code="fa",
 )
-result = service.import_csv_for_user(1, Path("data/sample.csv"), "sample.csv")
+result = service.import_csv_for_user(1, Path("data/sample.csv"), "sample.csv", new_category_name="Local Batch")
 print(len(result["imported_sentence_ids"]))
-print(service.export_user_csv(1))
+print(result["library_category_key"])
+print(service.export_user_csv(1, result["library_category_key"]))
 PY
 ```
 
@@ -162,8 +163,9 @@ from echolingua.telegram_bot.service import TelegramBotService
 
 service = TelegramBotService(load_config())
 service.ensure_user(telegram_user_id=11, chat_id=11, username="botcheck")
-service.import_csv_for_user(11, Path("data/sample.csv"), "sample.csv")
-print(service.sentence_summary(11))
+result = service.import_csv_for_user(11, Path("data/sample.csv"), "sample.csv", new_category_name="Bot Drill")
+print(service.list_library_categories(11))
+print(service.library_category_summary(11, result["library_category_key"]))
 print(service.describe_custom_recipe(11)["summary"])
 service.create_or_update_custom_recipe(11, {"pause_between_ms": 3500, "word_pause_ms": 1100})
 print(service.describe_custom_recipe(11))
@@ -173,6 +175,7 @@ sentence = service.add_sentence_from_target_text(
     target_language="en",
     target_text="Where are you going?",
     translation_text="کجا می‌روی؟",
+    library_category_key=result["library_category_key"],
 )
 print(sentence.id, sentence.english, sentence.persian)
 resolved = service.resolve_recipe_for_user(11, "telegram_custom_ladder")
@@ -191,8 +194,9 @@ print(recipe.recipe_key, recipe.display_name)
 print([item.recipe_name for item in service.available_recipes(11)])
 print(service.resolve_recipe_for_user(11, recipe.recipe_key)["recipe_name"])
 service.update_settings(11, extra_config={"target_language": "en", "page_size": 5})
-page = service.paginated_user_sentences(11, 0)
+page = service.paginated_user_sentences(11, 0, category_key=result["library_category_key"])
 print(page["page"], page["page_size"], len(page["items"]))
+print(service.generate_all_sentence_audio_for_category(11, result["library_category_key"])[0]["audio_path"])
 PY
 ```
 
@@ -205,6 +209,20 @@ app = build_application()
 print(type(app).__name__)
 PY
 ```
+
+Proxy fallback check:
+
+```bash
+python - <<'PY'
+from echolingua.core.config import load_config
+from echolingua.telegram_bot.app import _resolve_startup_proxy_url
+
+config = load_config()
+print(_resolve_startup_proxy_url(config))
+PY
+```
+
+If the configured Telegram proxy is healthy, this prints the proxy URL. If the proxy is broken, it prints `None` and the bot should start with a direct Telegram connection instead.
 
 Bot runtime:
 
@@ -223,8 +241,9 @@ docker compose up bot
 Security note:
 
 - the current Telegram bot token in `.env` should be rotated after setup because it was provided directly in chat
-- CSV import currently replaces the importing user's active library with the latest enabled rows from that CSV
+- CSV import now adds sentences to the user's global library and assigns them to a chosen library category
 - if the deployment environment needs a Telegram proxy, set `ECHOLINGUA_TELEGRAM_BOT_PROXY_URL`
+- if that proxy becomes unstable, the bot startup now auto-falls back to direct connectivity instead of remaining down on Telegram
 
 ## Inspect generated artifacts
 

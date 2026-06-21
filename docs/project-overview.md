@@ -4,6 +4,8 @@
 
 EchoLingua is a local-first language-learning audio pipeline. It converts multilingual sentence CSV files into recipe-driven audio outputs, stores runtime state in SQLite, and exposes the pipeline through both a CLI and a Telegram bot service.
 
+The Telegram bot runtime now includes startup proxy hardening: when `ECHOLINGUA_TELEGRAM_BOT_PROXY_URL` is configured, the bot probes that proxy before polling and automatically falls back to a direct Telegram connection if the proxy is unreachable or returns broken HTTP responses.
+
 ## Main Runtime Components
 
 - `echolingua.pipeline.runner.PipelineRunner`
@@ -19,7 +21,7 @@ EchoLingua is a local-first language-learning audio pipeline. It converts multil
   SQLite schema and repository helpers for jobs, events, provider attempts, audio outputs, cache metadata, and Telegram user data.
 
 - `echolingua.telegram_bot.service.TelegramBotService`
-  User-scoped sentence library management, Telegram imports/exports, recipe resolution, and audio generation through the same pipeline.
+  User-scoped sentence library management, category membership, Telegram imports/exports, recipe resolution, and audio generation through the same pipeline.
 
 - `echolingua.cli`
   CLI entrypoint for validation, dry-run, generation, stats, cache inspection, and log inspection.
@@ -60,6 +62,15 @@ EchoLingua is a local-first language-learning audio pipeline. It converts multil
 3. Write a temporary single-sentence CSV.
 4. Call `PipelineRunner.generate_sentence_files(...)`.
 5. Return the generated audio path, manifest path, caption, and resolved recipe details.
+
+### Telegram category model
+
+1. The full user library is stored once per user.
+2. Library categories are stored separately from sentence content.
+3. `All Sentences` is a virtual category over the full user library.
+4. Real categories store sentence membership and per-category activity.
+5. CSV import can target an existing category or create a new one.
+6. Export and send-all actions operate on the currently selected category.
 
 ## Logging and Instrumentation Coverage
 

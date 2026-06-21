@@ -261,9 +261,11 @@ Current bot capabilities:
 
 - creates a Telegram user record on `/start`
 - stores per-user settings in SQLite
-- imports CSV files into the user's sentence library and replaces that user's active library with the imported enabled rows
-- exports the user's current sentence library back to CSV
-- keeps a user-scoped sentence snapshot so one user's imported CSV does not overwrite another user's library
+- keeps a user-scoped sentence library plus category membership metadata
+- provides a built-in virtual `All Sentences` category containing the user's full library
+- imports CSV files into either an existing library category or a newly created one
+- exports CSV per library category
+- generates all audio per library category
 - lets the user choose target language, recipe, provider, output format, and page size
 - includes a Telegram-managed custom ladder recipe flow for prompt type, pause lengths, and target-language voice choice
 - lets each user create and edit multiple personal recipes alongside shared recipes through an interactive guided flow
@@ -275,18 +277,21 @@ Current bot capabilities:
 Current bot flow highlights:
 
 - `/start`: onboarding + main menu
-- `/import_csv`: upload a CSV into the user's library
-- `/library`: paginated browsing of your sentence library, with per-sentence send/edit/remove actions
-- from the main menu or library: add a sentence by sending target-language text and then the Persian translation
+- `/import_csv`: upload a CSV and place it into an existing category or a new category
+- `/library`: category-first browsing, category detail pages, and paginated sentence browsing inside each category
+- category pages: see counts, levels, content categories, recipe usage, export CSV, and generate all audio
+- pagination now includes first-page and last-page navigation buttons
+- from the main menu or library: add a sentence by sending target-language text and then the Persian translation into the active category
 - recipe management: guided interactive recipe creation/editing with buttons plus a few targeted text inputs for names and pause values
-- `/export_csv`: export the current library
+- `/export_csv`: export the currently selected category
 - `/settings`: choose target language, recipe, provider, output format, page size, and custom ladder settings
-- `/send_all`: generate and send audio files one by one
+- `/send_all`: generate and send audio files for the currently selected category
 
 Operational notes:
 
 - the bot disables `httpx` environment proxy inheritance for Telegram API calls, so it can still boot on machines with incompatible local proxy env vars
 - it also supports an explicit Telegram proxy via `ECHOLINGUA_TELEGRAM_BOT_PROXY_URL`
+- at startup the bot now probes the configured Telegram proxy once and automatically falls back to a direct connection if that proxy is broken or misrouted
 - `telegram_custom_ladder` is generated at runtime from the user's saved bot settings and then executed through the same `PipelineRunner`
 - personal bot recipes are stored per user in SQLite and are resolved into runtime recipes just before generation
 - the current guided recipe builder focuses on practical listening/shadowing ladders rather than fully arbitrary segment-by-segment authoring
@@ -312,6 +317,11 @@ Bring the CLI image and Telegram bot up with Docker Compose:
 docker compose build
 docker compose up bot
 ```
+
+Docker note:
+
+- when `network_mode: host` is used, a local Telegram proxy such as `http://127.0.0.1:3128` can still work from the bot container because it shares the host network namespace
+- if that proxy accepts TCP but breaks Telegram HTTP requests, the bot now falls back to direct Telegram access during startup instead of staying down silently
 
 If you only want to check that the bot process builds correctly without connecting it long-term:
 
