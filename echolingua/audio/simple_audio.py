@@ -9,37 +9,38 @@ CHANNELS = 1
 
 
 class SimpleAudioSegment:
-    def __init__(self, duration_ms: int = 0) -> None:
+    def __init__(self, duration_ms: int = 0, frames: bytes | None = None) -> None:
         self.duration_ms = duration_ms
+        self.frames = frames if frames is not None else b"\x00\x00" * int(duration_ms * FRAME_RATE / 1000)
 
     @classmethod
     def silent(cls, duration: int) -> "SimpleAudioSegment":
-        return cls(duration)
+        return cls(duration, b"\x00\x00" * int(duration * FRAME_RATE / 1000))
 
     @classmethod
     def empty(cls) -> "SimpleAudioSegment":
-        return cls(0)
+        return cls(0, b"")
 
     @classmethod
     def from_file(cls, path: Path) -> "SimpleAudioSegment":
         with wave.open(str(path), "rb") as handle:
             frames = handle.getnframes()
             rate = handle.getframerate()
-            return cls(int(frames * 1000 / rate))
+            raw_frames = handle.readframes(frames)
+            return cls(int(frames * 1000 / rate), raw_frames)
 
     def export(self, path: Path, format: str = "wav") -> None:
         if format.lower() != "wav":
             raise ValueError(f"SimpleAudioSegment only supports wav export, not {format}")
         path.parent.mkdir(parents=True, exist_ok=True)
-        frames = int(self.duration_ms * FRAME_RATE / 1000)
         with wave.open(str(path), "wb") as handle:
             handle.setnchannels(CHANNELS)
             handle.setsampwidth(SAMPLE_WIDTH)
             handle.setframerate(FRAME_RATE)
-            handle.writeframes(b"\x00\x00" * frames)
+            handle.writeframes(self.frames)
 
     def __add__(self, other: "SimpleAudioSegment") -> "SimpleAudioSegment":
-        return SimpleAudioSegment(self.duration_ms + other.duration_ms)
+        return SimpleAudioSegment(self.duration_ms + other.duration_ms, self.frames + other.frames)
 
     def __len__(self) -> int:
         return self.duration_ms

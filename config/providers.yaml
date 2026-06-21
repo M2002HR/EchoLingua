@@ -8,7 +8,7 @@ tts:
       fr: fake-fr
     default_voice: fake-neutral
   edge:
-    enabled: false
+    enabled: true
     provider: edge
     priority: 20
     # Useful Edge voice options you can switch between in recipes:

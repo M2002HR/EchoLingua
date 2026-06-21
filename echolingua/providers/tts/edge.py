@@ -19,8 +19,6 @@ class EdgeTTSProvider:
         self.metadata = ProviderMetadata(name=name, kind="tts", priority=priority, enabled=enabled, config=config or {})
 
     def synthesize(self, request: TTSRequest, output_path: Path) -> TTSResult:
-        if importlib.util.find_spec("edge_tts") is None:
-            raise ProviderError("edge-tts is not installed. Install with: pip install 'echolingua[edge]'")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with NamedTemporaryFile(suffix=".mp3", dir=output_path.parent, delete=False) as handle:
             temp_mp3 = Path(handle.name)
@@ -40,6 +38,8 @@ class EdgeTTSProvider:
                 temp_mp3.unlink()
 
     def _save_mp3(self, request: TTSRequest, output_path: Path) -> None:
+        if importlib.util.find_spec("edge_tts") is None:
+            raise ProviderError("edge-tts is not installed. Install with: pip install 'echolingua[edge]'")
         import edge_tts
 
         async def _run() -> None:
