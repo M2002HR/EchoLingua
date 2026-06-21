@@ -24,17 +24,25 @@ def test_telegram_service_import_export_and_caption(tmp_path: Path, monkeypatch)
         last_name="Demo",
         language_code="fa",
     )
-    import_result = service.import_csv_for_user(1001, PROJECT_ROOT / "data/sample.csv", "sample.csv")
+    import_result = service.import_csv_for_user(
+        1001,
+        PROJECT_ROOT / "data/sample.csv",
+        "sample.csv",
+        new_category_name="Travel Set",
+    )
     assert len(import_result["imported_sentence_ids"]) == 100
+    assert import_result["library_category_key"] == "travel_set"
     settings = service.get_settings(1001)
     assert settings.selected_recipe == "persian_prompt_french_ladder"
     sentences = service.list_user_sentences(1001)
     assert len(sentences) == 100
+    categories = service.list_library_categories(1001)
+    assert any(category.key == "travel_set" for category in categories)
     caption = service.build_caption(sentences[0])
     assert "فارسی" in caption
     assert "English" in caption
     assert "Français" in caption
-    export_path = service.export_user_csv(1001)
+    export_path = service.export_user_csv(1001, "travel_set")
     assert export_path.exists()
 
 
@@ -86,7 +94,7 @@ def test_telegram_service_custom_recipe_and_user_library_snapshot(tmp_path: Path
         last_name="Demo",
         language_code="fa",
     )
-    service.import_csv_for_user(1002, PROJECT_ROOT / "data/sample.csv", "sample.csv")
+    service.import_csv_for_user(1002, PROJECT_ROOT / "data/sample.csv", "sample.csv", new_category_name="Bob Set")
 
     custom = service.create_or_update_custom_recipe(
         1002,
@@ -105,18 +113,20 @@ def test_telegram_service_custom_recipe_and_user_library_snapshot(tmp_path: Path
 
     all_sentences = service.list_user_sentences(1002)
     removed_id = all_sentences[0].id
-    service.remove_sentence_from_user(1002, removed_id)
-    remaining_ids = [sentence.id for sentence in service.list_user_sentences(1002)]
+    service.remove_sentence_from_user(1002, removed_id, category_key="bob_set")
+    remaining_ids = [sentence.id for sentence in service.list_user_sentences(1002, category_key="bob_set")]
     assert removed_id not in remaining_ids
 
-    service.add_sentence_to_user(1002, removed_id)
-    restored_ids = [sentence.id for sentence in service.list_user_sentences(1002)]
+    service.add_sentence_to_user(1002, removed_id, category_key="bob_set")
+    restored_ids = [sentence.id for sentence in service.list_user_sentences(1002, category_key="bob_set")]
     assert removed_id in restored_ids
 
     service.update_settings(1002, extra_config={"target_language": "fr", "page_size": 5})
-    page = service.paginated_user_sentences(1002, 0, page_size=5)
+    page = service.paginated_user_sentences(1002, 0, page_size=5, category_key="bob_set")
     assert page["page_size"] == 5
     assert len(page["items"]) == 5
+    summary = service.library_category_summary(1002, "bob_set")
+    assert summary["sentence_count"] >= 5
 
 
 def test_telegram_service_target_language_and_manual_sentence_flow(tmp_path: Path, monkeypatch) -> None:
@@ -138,15 +148,20 @@ def test_telegram_service_target_language_and_manual_sentence_flow(tmp_path: Pat
         language_code="en",
     )
     service.set_target_language(1003, "en")
+    created_category = service.create_library_category(1003, "English Starters", target_language="en")
+    assert created_category.key == "english_starters"
     sentence = service.add_sentence_from_target_text(
         1003,
         target_language="en",
         target_text="Good morning",
         translation_text="صبح بخیر",
+        library_category_key="english_starters",
     )
     assert sentence.english == "Good morning"
     assert sentence.persian == "صبح بخیر"
     assert service.build_caption(sentence, target_language="en").splitlines()[0].startswith("🇬🇧 English:")
+    category_page = service.paginated_user_sentences(1003, 0, page_size=8, category_key="english_starters")
+    assert category_page["items"][0].id == sentence.id
 
     updated = service.update_sentence_for_user(1003, sentence.id, english="Good morning!", persian="صبح عالی")
     assert updated.english == "Good morning!"
@@ -155,6 +170,44 @@ def test_telegram_service_target_language_and_manual_sentence_flow(tmp_path: Pat
     resolved = service.resolve_recipe_for_user(1003, "shadowing_basic")
     assert resolved["recipe_name"] == "shadowing_basic_en_tg"
     assert "English" in resolved["summary"]
+
+
+def test_telegram_service_category_summary_and_generate_all(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(PROJECT_ROOT)
+    base = load_config()
+    config = type(base)(
+        root_dir=tmp_path,
+        default=base.default,
+        providers=base.providers,
+        recipes=base.recipes,
+    )
+    service = TelegramBotService(config)
+    service.ensure_user(
+        telegram_user_id=2001,
+        chat_id=3001,
+        username="sam",
+        first_name="Sam",
+        last_name="Demo",
+        language_code="fa",
+    )
+    service.update_settings(2001, selected_provider="fake")
+    result = service.import_csv_for_user(
+        2001,
+        PROJECT_ROOT / "data/sample.csv",
+        "sample.csv",
+        new_category_name="Shadowing Batch",
+    )
+    category_key = result["library_category_key"]
+    summary_before = service.library_category_summary(2001, category_key)
+    assert summary_before["sentence_count"] == 100
+    assert summary_before["recipe_usage"] == {}
+
+    payloads = service.generate_all_sentence_audio_for_category(2001, category_key)
+    assert len(payloads) == 100
+    assert payloads[0]["audio_path"].exists()
+
+    summary_after = service.library_category_summary(2001, category_key)
+    assert summary_after["recipe_usage"]
 
 
 def test_telegram_service_user_recipe_create_update_and_resolve(tmp_path: Path, monkeypatch) -> None:

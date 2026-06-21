@@ -93,6 +93,37 @@ def test_storage_telegram_user_settings_and_sentence_list(tmp_path: Path, monkey
     repos.record_telegram_csv_import(12345, "sample.csv", tmp_path / "sample.csv", ["1", "3"])
 
 
+def test_storage_library_categories_and_activity(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(Path(".").resolve())
+    config = load_config()
+    config = type(config)(
+        root_dir=tmp_path,
+        default=config.default,
+        providers=config.providers,
+        recipes=config.recipes,
+    )
+    db = Database(config.db_path)
+    db.initialize()
+    repos = StorageRepositories(db)
+    repos.upsert_telegram_user(
+        telegram_user_id=555,
+        chat_id=555,
+        username="cats",
+        first_name="Cat",
+        last_name="User",
+        language_code="fa",
+    )
+    repos.ensure_telegram_library_category(555, "travel", "Travel", target_language="fr", description="Travel items")
+    repos.add_sentences_to_category(555, "travel", ["1", "2", "10"], source_type="csv_import")
+    repos.record_category_activity(555, "travel", recipe_name="shadowing_basic", action="generate_all", target_language="fr")
+    listed = repos.list_telegram_library_categories(555)
+    assert len(listed) == 1
+    assert listed[0].display_name == "Travel"
+    assert repos.list_category_sentence_ids(555, "travel") == ["1", "2", "10"]
+    assert repos.category_sentence_counts(555)["travel"] == 3
+    assert repos.list_category_activity_counts(555, "travel", group_by="recipe_name")["shadowing_basic"] == 1
+
+
 def test_storage_user_sentence_ids_are_sorted_numerically(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(Path(".").resolve())
     config = load_config()
