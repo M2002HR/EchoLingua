@@ -38,6 +38,15 @@ SCHEMA_STATEMENTS = (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       job_id TEXT NOT NULL,
       event_name TEXT NOT NULL,
+      event_status TEXT NOT NULL DEFAULT 'ok',
+      component TEXT NOT NULL DEFAULT 'echolingua',
+      operation TEXT,
+      duration_ms INTEGER,
+      level TEXT NOT NULL DEFAULT 'INFO',
+      trace_id TEXT,
+      span_id TEXT,
+      parent_span_id TEXT,
+      error_json TEXT,
       payload_json TEXT NOT NULL,
       created_at TEXT NOT NULL
     )
@@ -50,6 +59,9 @@ SCHEMA_STATEMENTS = (
       provider_kind TEXT NOT NULL,
       status TEXT NOT NULL,
       error_message TEXT,
+      duration_ms INTEGER,
+      cache_key TEXT,
+      request_summary_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL
     )
     """,
@@ -182,6 +194,8 @@ class Database:
             for statement in SCHEMA_STATEMENTS:
                 conn.execute(statement)
             self._ensure_job_columns(conn)
+            self._ensure_job_event_columns(conn)
+            self._ensure_provider_attempt_columns(conn)
 
     def _ensure_job_columns(self, conn: sqlite3.Connection) -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
@@ -194,3 +208,31 @@ class Database:
         for name, definition in additions.items():
             if name not in columns:
                 conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+
+    def _ensure_job_event_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(job_events)").fetchall()}
+        additions = {
+            "event_status": "TEXT NOT NULL DEFAULT 'ok'",
+            "component": "TEXT NOT NULL DEFAULT 'echolingua'",
+            "operation": "TEXT",
+            "duration_ms": "INTEGER",
+            "level": "TEXT NOT NULL DEFAULT 'INFO'",
+            "trace_id": "TEXT",
+            "span_id": "TEXT",
+            "parent_span_id": "TEXT",
+            "error_json": "TEXT",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE job_events ADD COLUMN {name} {definition}")
+
+    def _ensure_provider_attempt_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(provider_attempts)").fetchall()}
+        additions = {
+            "duration_ms": "INTEGER",
+            "cache_key": "TEXT",
+            "request_summary_json": "TEXT NOT NULL DEFAULT '{}'",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE provider_attempts ADD COLUMN {name} {definition}")

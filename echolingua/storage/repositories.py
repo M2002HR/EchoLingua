@@ -163,14 +163,46 @@ class StorageRepositories:
                 (status, stage, message, completed_steps, total_steps, job_id),
             )
 
-    def record_event(self, job_id: str, event_name: str, payload: dict[str, Any]) -> None:
+    def record_event(
+        self,
+        job_id: str,
+        event_name: str,
+        payload: dict[str, Any],
+        *,
+        status: str = "ok",
+        component: str = "echolingua",
+        operation: str | None = None,
+        duration_ms: int | None = None,
+        level: str = "INFO",
+        trace_id: str | None = None,
+        span_id: str | None = None,
+        parent_span_id: str | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
         with self.db.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO job_events(job_id, event_name, payload_json, created_at)
-                VALUES(?, ?, ?, ?)
+                INSERT INTO job_events(
+                  job_id, event_name, event_status, component, operation, duration_ms,
+                  level, trace_id, span_id, parent_span_id, error_json, payload_json, created_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (job_id, event_name, json.dumps(payload, ensure_ascii=False), _utc_now()),
+                (
+                    job_id,
+                    event_name,
+                    status,
+                    component,
+                    operation,
+                    duration_ms,
+                    level,
+                    trace_id,
+                    span_id,
+                    parent_span_id,
+                    json.dumps(error, ensure_ascii=False) if error is not None else None,
+                    json.dumps(payload, ensure_ascii=False),
+                    _utc_now(),
+                ),
             )
 
     def record_provider_attempt(
@@ -180,14 +212,31 @@ class StorageRepositories:
         provider_kind: str,
         status: str,
         error_message: str | None,
+        *,
+        duration_ms: int | None = None,
+        cache_key: str | None = None,
+        request_summary: dict[str, Any] | None = None,
     ) -> None:
         with self.db.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO provider_attempts(job_id, provider_name, provider_kind, status, error_message, created_at)
-                VALUES(?, ?, ?, ?, ?, ?)
+                INSERT INTO provider_attempts(
+                  job_id, provider_name, provider_kind, status, error_message,
+                  duration_ms, cache_key, request_summary_json, created_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (job_id, provider_name, provider_kind, status, error_message, _utc_now()),
+                (
+                    job_id,
+                    provider_name,
+                    provider_kind,
+                    status,
+                    error_message,
+                    duration_ms,
+                    cache_key,
+                    json.dumps(request_summary or {}, ensure_ascii=False),
+                    _utc_now(),
+                ),
             )
 
     def record_audio_output(self, job_id: str, output: Path, manifest_path: Path, duration_ms: int) -> None:

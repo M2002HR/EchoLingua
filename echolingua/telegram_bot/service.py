@@ -8,6 +8,7 @@ from typing import Any
 
 from echolingua.core.config import AppConfig
 from echolingua.core.errors import ConfigError, ValidationError
+from echolingua.core.logging import JsonlLogger
 from echolingua.pipeline.runner import PipelineRunner
 from echolingua.recipes.loader import get_recipe
 from echolingua.recipes.models import Recipe, RecipeSegment
@@ -56,6 +57,7 @@ class TelegramBotService:
         self.db = Database(config.db_path)
         self.db.initialize()
         self.repositories = StorageRepositories(self.db)
+        self.logger = JsonlLogger(config.log_dir)
         self.runner = PipelineRunner(config)
         self.sentence_repository = SentenceRepository(self.db)
         self.config.telegram_import_dir.mkdir(parents=True, exist_ok=True)
@@ -101,75 +103,104 @@ class TelegramBotService:
         return self.repositories.get_telegram_user_settings(telegram_user_id)
 
     def import_csv_for_user(self, telegram_user_id: int, source_path: Path, file_name: str | None = None) -> dict[str, Any]:
-        stored_path = self.config.telegram_import_dir / (file_name or source_path.name)
-        stored_path.write_bytes(source_path.read_bytes())
-        sentences, report = load_sentences_with_report(stored_path, include_disabled=True)
-        if not report.is_valid:
-            issue = report.issues[0].message if report.issues else "CSV validation failed."
-            raise ValidationError(issue)
-        self._persist_sentences(sentences)
-        enabled_sentences = [sentence for sentence in sentences if sentence.enabled]
-        self.repositories.replace_telegram_sentence_library(telegram_user_id, enabled_sentences, source_type="csv_import")
-        self.repositories.replace_user_sentences(
-            telegram_user_id,
-            [sentence.id for sentence in enabled_sentences],
-            source_type="csv_import",
-        )
-        self.repositories.record_telegram_csv_import(
-            telegram_user_id,
-            file_name or source_path.name,
-            stored_path,
-            [sentence.id for sentence in enabled_sentences],
-        )
-        return {
-            "path": stored_path,
-            "report": report,
-            "imported_sentence_ids": [sentence.id for sentence in enabled_sentences],
-        }
+        job_id = f"telegram-import-{telegram_user_id}"
+        with self.logger.trace(
+            "telegram.import_csv_for_user",
+            component="telegram.service",
+            job_id=job_id,
+            metadata={"telegram_user_id": telegram_user_id, "source_path": str(source_path), "file_name": file_name},
+        ) as trace:
+            stored_path = self.config.telegram_import_dir / (file_name or source_path.name)
+            with trace.span("telegram.copy_import_file", component="telegram.service", payload={"stored_path": str(stored_path)}) as span:
+                stored_path.write_bytes(source_path.read_bytes())
+                span.set_result(stored_path=str(stored_path), size_bytes=stored_path.stat().st_size)
+            with trace.span("telegram.load_import_csv", component="telegram.service", payload={"stored_path": str(stored_path)}) as span:
+                sentences, report = load_sentences_with_report(stored_path, include_disabled=True)
+                span.set_result(total_rows=report.total_rows, enabled_rows=report.enabled_rows, valid=report.is_valid)
+            if not report.is_valid:
+                issue = report.issues[0].message if report.issues else "CSV validation failed."
+                raise ValidationError(issue)
+            with trace.span("telegram.persist_import_sentences", component="telegram.service", payload={"telegram_user_id": telegram_user_id}) as span:
+                self._persist_sentences(sentences)
+                enabled_sentences = [sentence for sentence in sentences if sentence.enabled]
+                self.repositories.replace_telegram_sentence_library(telegram_user_id, enabled_sentences, source_type="csv_import")
+                self.repositories.replace_user_sentences(
+                    telegram_user_id,
+                    [sentence.id for sentence in enabled_sentences],
+                    source_type="csv_import",
+                )
+                self.repositories.record_telegram_csv_import(
+                    telegram_user_id,
+                    file_name or source_path.name,
+                    stored_path,
+                    [sentence.id for sentence in enabled_sentences],
+                )
+                span.set_result(imported_sentence_count=len(enabled_sentences))
+            trace.set_summary(
+                telegram_user_id=telegram_user_id,
+                imported_sentence_count=len(enabled_sentences),
+                file_name=file_name or source_path.name,
+                stored_path=str(stored_path),
+            )
+            return {
+                "path": stored_path,
+                "report": report,
+                "imported_sentence_ids": [sentence.id for sentence in enabled_sentences],
+            }
 
     def export_user_csv(self, telegram_user_id: int) -> Path:
-        sentences = self.list_user_sentences(telegram_user_id)
-        export_path = self.config.telegram_export_dir / f"user_{telegram_user_id}_sentences.csv"
-        with export_path.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(
-                [
-                    "id",
-                    "persian",
-                    "english",
-                    "french",
-                    "level",
-                    "category",
-                    "recommended_start",
-                    "enabled",
-                    "tags",
-                    "notes",
-                    "priority",
-                    "difficulty",
-                    "voice_hint",
-                    "pronunciation_note",
-                ]
-            )
-            for sentence in sentences:
-                writer.writerow(
-                    [
-                        sentence.id,
-                        sentence.persian,
-                        sentence.english,
-                        sentence.french,
-                        sentence.level,
-                        sentence.category,
-                        sentence.recommended_start,
-                        "true" if sentence.enabled else "false",
-                        ",".join(sentence.tags),
-                        sentence.notes,
-                        sentence.priority,
-                        sentence.difficulty,
-                        sentence.voice_hint,
-                        sentence.pronunciation_note,
-                    ]
-                )
-        return export_path
+        job_id = f"telegram-export-{telegram_user_id}"
+        with self.logger.trace(
+            "telegram.export_user_csv",
+            component="telegram.service",
+            job_id=job_id,
+            metadata={"telegram_user_id": telegram_user_id},
+        ) as trace:
+            sentences = self.list_user_sentences(telegram_user_id)
+            export_path = self.config.telegram_export_dir / f"user_{telegram_user_id}_sentences.csv"
+            with trace.span("telegram.write_export_csv", component="telegram.service", payload={"export_path": str(export_path)}) as span:
+                with export_path.open("w", encoding="utf-8", newline="") as handle:
+                    writer = csv.writer(handle)
+                    writer.writerow(
+                        [
+                            "id",
+                            "persian",
+                            "english",
+                            "french",
+                            "level",
+                            "category",
+                            "recommended_start",
+                            "enabled",
+                            "tags",
+                            "notes",
+                            "priority",
+                            "difficulty",
+                            "voice_hint",
+                            "pronunciation_note",
+                        ]
+                    )
+                    for sentence in sentences:
+                        writer.writerow(
+                            [
+                                sentence.id,
+                                sentence.persian,
+                                sentence.english,
+                                sentence.french,
+                                sentence.level,
+                                sentence.category,
+                                sentence.recommended_start,
+                                "true" if sentence.enabled else "false",
+                                ",".join(sentence.tags),
+                                sentence.notes,
+                                sentence.priority,
+                                sentence.difficulty,
+                                sentence.voice_hint,
+                                sentence.pronunciation_note,
+                            ]
+                        )
+                span.set_result(export_path=str(export_path), sentence_count=len(sentences))
+            trace.set_summary(telegram_user_id=telegram_user_id, export_path=str(export_path), sentence_count=len(sentences))
+            return export_path
 
     def list_user_sentences(self, telegram_user_id: int) -> list[Sentence]:
         sentence_ids = self.repositories.list_user_sentence_ids(telegram_user_id)
@@ -273,34 +304,60 @@ class TelegramBotService:
         provider_name: str | None = None,
         output_format: str | None = None,
     ) -> dict[str, Any]:
-        settings = self.get_settings(telegram_user_id)
-        sentence = next((item for item in self.list_user_sentences(telegram_user_id) if item.id == sentence_id), None)
-        if sentence is None:
-            raise ValidationError(f"Sentence {sentence_id} is not in the user's list.")
-        output_dir = self.config.telegram_temp_audio_dir / str(telegram_user_id)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        resolved_recipe_name = recipe_name or settings.selected_recipe
-        resolved_provider_name = provider_name or settings.selected_provider
-        resolved_output_format = output_format or settings.output_format
-        recipe_payload = self.resolve_recipe_for_user(telegram_user_id, resolved_recipe_name)
-        result = self.runner.generate_sentence_files(
-            job_id=f"tg-{telegram_user_id}-{sentence_id}",
-            csv_path=self._write_single_sentence_csv(sentence),
-            recipe_name=recipe_payload["recipe_name"],
-            output_dir=output_dir,
-            output_format=resolved_output_format,
-            provider_name=resolved_provider_name,
-        )
-        file_entry = result["files"][0]
-        target_language = self.get_target_language(telegram_user_id)
-        return {
-            "audio_path": Path(str(file_entry["output"])),
-            "manifest_path": Path(str(file_entry["manifest"])),
-            "caption": self.build_caption(sentence, target_language=target_language),
-            "sentence": sentence,
-            "recipe_name": recipe_payload["recipe_name"],
-            "recipe_summary": recipe_payload["summary"],
-        }
+        job_id = f"tg-{telegram_user_id}-{sentence_id}"
+        with self.logger.trace(
+            "telegram.generate_sentence_audio_for_user",
+            component="telegram.service",
+            job_id=job_id,
+            metadata={
+                "telegram_user_id": telegram_user_id,
+                "sentence_id": sentence_id,
+                "recipe_name": recipe_name,
+                "provider_name": provider_name,
+                "output_format": output_format,
+            },
+        ) as trace:
+            settings = self.get_settings(telegram_user_id)
+            sentence = next((item for item in self.list_user_sentences(telegram_user_id) if item.id == sentence_id), None)
+            if sentence is None:
+                raise ValidationError(f"Sentence {sentence_id} is not in the user's list.")
+            output_dir = self.config.telegram_temp_audio_dir / str(telegram_user_id)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            resolved_recipe_name = recipe_name or settings.selected_recipe
+            resolved_provider_name = provider_name or settings.selected_provider
+            resolved_output_format = output_format or settings.output_format
+            with trace.span("telegram.resolve_recipe", component="telegram.service", payload={"recipe_name": resolved_recipe_name}) as span:
+                recipe_payload = self.resolve_recipe_for_user(telegram_user_id, resolved_recipe_name)
+                span.set_result(recipe_name=recipe_payload["recipe_name"], summary=recipe_payload["summary"])
+            with trace.span("telegram.write_single_sentence_csv", component="telegram.service", payload={"sentence_id": sentence.id}) as span:
+                sentence_csv = self._write_single_sentence_csv(sentence)
+                span.set_result(csv_path=str(sentence_csv))
+            result = self.runner.generate_sentence_files(
+                job_id=job_id,
+                csv_path=sentence_csv,
+                recipe_name=recipe_payload["recipe_name"],
+                output_dir=output_dir,
+                output_format=resolved_output_format,
+                provider_name=resolved_provider_name,
+            )
+            file_entry = result["files"][0]
+            target_language = self.get_target_language(telegram_user_id)
+            payload = {
+                "audio_path": Path(str(file_entry["output"])),
+                "manifest_path": Path(str(file_entry["manifest"])),
+                "caption": self.build_caption(sentence, target_language=target_language),
+                "sentence": sentence,
+                "recipe_name": recipe_payload["recipe_name"],
+                "recipe_summary": recipe_payload["summary"],
+            }
+            trace.set_summary(
+                telegram_user_id=telegram_user_id,
+                sentence_id=sentence_id,
+                audio_path=str(payload["audio_path"]),
+                manifest_path=str(payload["manifest_path"]),
+                recipe_name=payload["recipe_name"],
+            )
+            return payload
 
     def build_caption(self, sentence: Sentence, target_language: str = "fr") -> str:
         target_label = self.target_language_label(target_language)

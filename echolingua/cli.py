@@ -248,5 +248,15 @@ def logs_tail(lines: int = typer.Option(50, help="Number of log lines to show"))
         typer.echo(entry)
 
 
+@logs_app.command("summary")
+def logs_summary(job_id: str = typer.Argument(..., help="Job id to inspect")) -> None:
+    runner = PipelineRunner(load_config())
+    summary = runner.latest_job_summary(job_id)
+    if summary is None:
+        typer.echo(f"No summary artifact found for job: {job_id}")
+        raise typer.Exit(code=1)
+    _echo_json(summary)
+
+
 if __name__ == "__main__":
     app()
