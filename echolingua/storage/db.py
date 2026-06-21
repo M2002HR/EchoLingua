@@ -115,6 +115,28 @@ SCHEMA_STATEMENTS = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS telegram_library_categories (
+      telegram_user_id INTEGER NOT NULL,
+      category_key TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      target_language TEXT NOT NULL DEFAULT 'fr',
+      description TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (telegram_user_id, category_key)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS telegram_category_sentences (
+      telegram_user_id INTEGER NOT NULL,
+      category_key TEXT NOT NULL,
+      sentence_id TEXT NOT NULL,
+      source_type TEXT NOT NULL DEFAULT 'manual',
+      added_at TEXT NOT NULL,
+      PRIMARY KEY (telegram_user_id, category_key, sentence_id)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS telegram_sentence_library (
       telegram_user_id INTEGER NOT NULL,
       sentence_id TEXT NOT NULL,
@@ -156,6 +178,19 @@ SCHEMA_STATEMENTS = (
       file_path TEXT NOT NULL,
       imported_rows INTEGER NOT NULL DEFAULT 0,
       imported_sentence_ids_json TEXT NOT NULL DEFAULT '[]',
+      library_category_key TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS telegram_category_activity (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      telegram_user_id INTEGER NOT NULL,
+      category_key TEXT NOT NULL,
+      sentence_id TEXT,
+      recipe_name TEXT NOT NULL DEFAULT '',
+      action TEXT NOT NULL DEFAULT 'generate',
+      target_language TEXT NOT NULL DEFAULT 'fr',
       created_at TEXT NOT NULL
     )
     """,
@@ -196,6 +231,8 @@ class Database:
             self._ensure_job_columns(conn)
             self._ensure_job_event_columns(conn)
             self._ensure_provider_attempt_columns(conn)
+            self._ensure_csv_import_columns(conn)
+            self._ensure_category_columns(conn)
 
     def _ensure_job_columns(self, conn: sqlite3.Connection) -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
@@ -236,3 +273,55 @@ class Database:
         for name, definition in additions.items():
             if name not in columns:
                 conn.execute(f"ALTER TABLE provider_attempts ADD COLUMN {name} {definition}")
+
+    def _ensure_csv_import_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(telegram_csv_imports)").fetchall()}
+        additions = {
+            "library_category_key": "TEXT NOT NULL DEFAULT ''",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE telegram_csv_imports ADD COLUMN {name} {definition}")
+
+    def _ensure_category_columns(self, conn: sqlite3.Connection) -> None:
+        # This also lets older SQLite files migrate to the current category-aware model.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS telegram_library_categories (
+              telegram_user_id INTEGER NOT NULL,
+              category_key TEXT NOT NULL,
+              display_name TEXT NOT NULL,
+              target_language TEXT NOT NULL DEFAULT 'fr',
+              description TEXT NOT NULL DEFAULT '',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY (telegram_user_id, category_key)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS telegram_category_sentences (
+              telegram_user_id INTEGER NOT NULL,
+              category_key TEXT NOT NULL,
+              sentence_id TEXT NOT NULL,
+              source_type TEXT NOT NULL DEFAULT 'manual',
+              added_at TEXT NOT NULL,
+              PRIMARY KEY (telegram_user_id, category_key, sentence_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS telegram_category_activity (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              telegram_user_id INTEGER NOT NULL,
+              category_key TEXT NOT NULL,
+              sentence_id TEXT,
+              recipe_name TEXT NOT NULL DEFAULT '',
+              action TEXT NOT NULL DEFAULT 'generate',
+              target_language TEXT NOT NULL DEFAULT 'fr',
+              created_at TEXT NOT NULL
+            )
+            """
+        )

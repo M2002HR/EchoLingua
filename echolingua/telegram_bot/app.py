@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+from typing import Awaitable, Callable
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.error import BadRequest
+from telegram.error import NetworkError as TelegramNetworkError
+from telegram import Bot
 from telegram.constants import ChatAction, ParseMode
 from telegram.helpers import escape_markdown
 from telegram.ext import (
@@ -17,11 +21,17 @@ from telegram.ext import (
 )
 from telegram.request import HTTPXRequest
 
-from echolingua.core.config import load_config
+from echolingua.core.config import AppConfig, load_config
 from echolingua.core.errors import EchoLinguaError
-from echolingua.telegram_bot.service import TARGET_LANGUAGES, TelegramBotService
+from echolingua.telegram_bot.service import (
+    ALL_SENTENCES_CATEGORY_KEY,
+    DEFAULT_LIBRARY_CATEGORY_KEY,
+    TARGET_LANGUAGES,
+    TelegramBotService,
+)
 
 LOGGER = logging.getLogger(__name__)
+_UNSET = object()
 
 STATE_WAITING_FOR_CSV = 1
 
@@ -38,14 +48,30 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 
-def build_application() -> Application:
-    config = load_config()
+def _configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+
+def _build_request(proxy_url: str | None) -> HTTPXRequest:
+    request_kwargs: dict[str, object] = {"httpx_kwargs": {"trust_env": False}}
+    if proxy_url:
+        request_kwargs["proxy"] = proxy_url
+    return HTTPXRequest(**request_kwargs)
+
+
+def build_application(
+    *,
+    config: AppConfig | None = None,
+    proxy_url_override: str | None | object = _UNSET,
+) -> Application:
+    config = config or load_config()
     if not config.telegram_bot_token:
         raise RuntimeError("ECHOLINGUA_TELEGRAM_BOT_TOKEN is not configured.")
-    request_kwargs: dict[str, object] = {"httpx_kwargs": {"trust_env": False}}
-    if config.telegram_bot_proxy_url:
-        request_kwargs["proxy"] = config.telegram_bot_proxy_url
-    request = HTTPXRequest(**request_kwargs)
+    proxy_url = config.telegram_bot_proxy_url if proxy_url_override is _UNSET else proxy_url_override
+    request = _build_request(str(proxy_url or "").strip() or None)
     application = (
         Application.builder()
         .token(config.telegram_bot_token)
@@ -77,6 +103,38 @@ def build_application() -> Application:
     application.add_handler(CallbackQueryHandler(handle_callback))
     application.add_error_handler(handle_error)
     return application
+
+
+async def _probe_bot_connection(token: str, proxy_url: str | None) -> None:
+    request = _build_request(proxy_url)
+    bot = Bot(token=token, request=request)
+    try:
+        await bot.initialize()
+        await bot.get_me()
+    finally:
+        await bot.shutdown()
+
+
+def _resolve_startup_proxy_url(
+    config: AppConfig,
+    *,
+    probe: Callable[[str, str | None], Awaitable[None]] = _probe_bot_connection,
+) -> str | None:
+    proxy_url = config.telegram_bot_proxy_url.strip()
+    if not proxy_url:
+        return None
+    try:
+        asyncio.run(probe(config.telegram_bot_token, proxy_url))
+        LOGGER.info("Telegram bot startup probe succeeded with configured proxy.")
+        return proxy_url
+    except Exception as exc:
+        LOGGER.warning(
+            "Telegram bot proxy probe failed for %s; falling back to direct connection. %s: %s",
+            proxy_url,
+            exc.__class__.__name__,
+            exc,
+        )
+        return None
 
 
 async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -131,7 +189,7 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def library_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _show_library(update, context, page=0)
+    await _show_library_categories(update, context)
 
 
 def _reset_recipe_wizard(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -142,6 +200,10 @@ def _reset_recipe_wizard(context: ContextTypes.DEFAULT_TYPE) -> None:
         "editing_recipe_name",
         "new_sentence_target_text",
         "editing_sentence_id",
+        "pending_import_path",
+        "pending_import_file_name",
+        "pending_import_category_key",
+        "editing_library_category_key",
     ]:
         context.user_data.pop(key, None)
 
@@ -159,7 +221,7 @@ async def recipes_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def import_csv_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.effective_message.reply_text(
-        "📥 فایل CSV را همینجا بفرست.\n\nبا ایمپورت جدید، کتابخانه فعلی همان کاربر با داده‌های enabled جدید جایگزین می‌شود.\nبرای لغو: /cancel",
+        "📥 فایل CSV را همینجا بفرست.\n\nبعد از دریافت فایل، می‌توانی آن را داخل یک دسته موجود بریزی یا یک دسته جدید بسازی.\nبرای لغو: /cancel",
         reply_markup=ReplyKeyboardRemove(),
     )
     return STATE_WAITING_FOR_CSV
@@ -174,49 +236,44 @@ async def import_csv_document(update: Update, context: ContextTypes.DEFAULT_TYPE
     temp_path = service.config.telegram_import_dir / document.file_name
     telegram_file = await document.get_file()
     await telegram_file.download_to_drive(custom_path=str(temp_path))
-    try:
-        result = service.import_csv_for_user(update.effective_user.id, temp_path, document.file_name)
-    except EchoLinguaError as exc:
-        await update.effective_message.reply_text(f"❌ ایمپورت ناموفق بود:\n{exc}", reply_markup=MENU_KEYBOARD)
-        return ConversationHandler.END
-    report = result["report"]
-    summary = service.sentence_summary(update.effective_user.id)
-    await update.effective_message.reply_text(
-        "✅ ایمپورت انجام شد\n\n"
-        f"Rows: {report.total_rows}\n"
-        f"Enabled: {report.enabled_rows}\n"
-        f"Imported: {len(result['imported_sentence_ids'])}\n"
-        f"Levels: {', '.join(f'{k}:{v}' for k, v in summary['levels'].items()) or '-'}\n"
-        f"Categories: {', '.join(f'{k}:{v}' for k, v in summary['categories'].items()) or '-'}",
-        reply_markup=MENU_KEYBOARD,
+    context.user_data["pending_import_path"] = str(temp_path)
+    context.user_data["pending_import_file_name"] = document.file_name
+    await _send_or_edit(
+        update,
+        _import_category_text(service, update.effective_user.id),
+        reply_markup=_import_category_keyboard(service, update.effective_user.id),
+        parse_mode=ParseMode.MARKDOWN,
     )
     return ConversationHandler.END
 
 
 async def export_csv(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     service = _service(context)
-    export_path = service.export_user_csv(_effective_user_id(update))
-    await _message(update).reply_document(document=str(export_path), caption="📤 خروجی CSV شما آماده است.")
+    category_key = service.selected_library_category(_effective_user_id(update))
+    export_path = service.export_category_csv(_effective_user_id(update), category_key)
+    await _message(update).reply_document(document=str(export_path), caption="📤 خروجی CSV دسته انتخاب‌شده آماده است.")
 
 
 async def send_all_sentences(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     service = _service(context)
     user_id = _effective_user_id(update)
-    sentences = service.list_user_sentences(user_id)
+    category_key = service.selected_library_category(user_id)
+    descriptor = service.describe_library_category(user_id, category_key)
+    sentences = service.list_user_sentences(user_id, category_key=category_key)
     if not sentences:
-        await _send_or_edit(update, "📭 هنوز جمله‌ای برای شما ثبت نشده. اول CSV وارد کن.", reply_markup=_main_menu_keyboard())
+        await _send_or_edit(update, "📭 هنوز جمله‌ای برای این دسته ثبت نشده. اول CSV وارد کن یا جمله اضافه کن.", reply_markup=_main_menu_keyboard())
         return
-    await _send_or_edit(update, f"🎧 شروع ارسال {len(sentences)} ویس. کمی زمان می‌برد.", reply_markup=_main_menu_keyboard())
-    for index, sentence in enumerate(sentences, start=1):
+    await _send_or_edit(update, f"🎧 شروع ارسال {len(sentences)} ویس برای دسته `{escape_markdown(descriptor.display_name)}`.", reply_markup=_main_menu_keyboard(), parse_mode=ParseMode.MARKDOWN)
+    payloads = service.generate_all_sentence_audio_for_category(user_id, category_key)
+    for index, payload in enumerate(payloads, start=1):
         await context.bot.send_chat_action(chat_id=_chat_id(update), action=ChatAction.UPLOAD_VOICE)
-        payload = service.generate_sentence_audio_for_user(user_id, sentence.id)
         with payload["audio_path"].open("rb") as handle:
             await context.bot.send_audio(
                 chat_id=_chat_id(update),
                 audio=handle,
-                caption=f"{payload['caption']}\n\n🧩 {index}/{len(sentences)} | Recipe: {payload['recipe_name']}",
+                caption=f"{payload['caption']}\n\n🧩 {index}/{len(payloads)} | Recipe: {payload['recipe_name']}",
             )
-    await context.bot.send_message(chat_id=_chat_id(update), text="✅ ارسال همه فایل‌ها تمام شد.", reply_markup=MENU_KEYBOARD)
+    await context.bot.send_message(chat_id=_chat_id(update), text="✅ ارسال همه فایل‌های دسته تمام شد.", reply_markup=MENU_KEYBOARD)
 
 
 async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -281,6 +338,52 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         context.user_data.pop("awaiting_input", None)
         await update.effective_message.reply_text("✅ تعداد آیتم هر صفحه ذخیره شد.", reply_markup=MENU_KEYBOARD)
         return
+    if awaiting == "library_category_name":
+        category = service.create_library_category(user_id, text)
+        context.user_data.pop("awaiting_input", None)
+        await _send_or_edit(
+            update,
+            f"✅ دسته `{escape_markdown(category.display_name)}` ساخته شد و فعال شد.",
+            reply_markup=_library_categories_keyboard(service, user_id),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+    if awaiting == "library_category_edit_name":
+        category_key = str(context.user_data.get("editing_library_category_key", ""))
+        updated = service.update_library_category(user_id, category_key, display_name=text)
+        context.user_data.pop("awaiting_input", None)
+        context.user_data.pop("editing_library_category_key", None)
+        await _send_or_edit(
+            update,
+            f"✅ نام دسته به `{escape_markdown(updated.display_name)}` تغییر کرد.",
+            reply_markup=_category_detail_keyboard(service, user_id, updated.key),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+    if awaiting == "import_new_category_name":
+        import_path = Path(str(context.user_data.get("pending_import_path", "")))
+        file_name = str(context.user_data.get("pending_import_file_name", "")) or None
+        if not import_path.exists():
+            await update.effective_message.reply_text("❌ فایل ایمپورت پیدا نشد. دوباره CSV را بفرست.", reply_markup=MENU_KEYBOARD)
+            _reset_recipe_wizard(context)
+            return
+        result = service.import_csv_for_user(
+            user_id,
+            import_path,
+            file_name,
+            new_category_name=text,
+            replace_existing_category=True,
+        )
+        category_summary = service.library_category_summary(user_id, result["library_category_key"])
+        context.user_data.pop("awaiting_input", None)
+        context.user_data.pop("pending_import_path", None)
+        context.user_data.pop("pending_import_file_name", None)
+        await update.effective_message.reply_text(
+            _import_result_text(result["report"], category_summary),
+            reply_markup=MENU_KEYBOARD,
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
     if awaiting == "recipe_silence_scale":
         try:
             value = float(text)
@@ -305,6 +408,7 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             target_language=target_language,
             target_text=target_text,
             translation_text=text,
+            library_category_key=service.selected_library_category(user_id),
         )
         context.user_data.pop("new_sentence_target_text", None)
         context.user_data.pop("awaiting_input", None)
@@ -375,7 +479,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.message.reply_text("📥 فایل CSV را بفرست یا /import_csv را بزن.")
         return
     if data == "menu:library":
-        await _show_library(update, context, page=0)
+        await _show_library_categories(update, context)
         return
     if data == "menu:send_all":
         await send_all_sentences(update, context)
@@ -392,26 +496,97 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data == "menu:help":
         await help_command(update, context)
         return
+    if data == "library:categories":
+        await _show_library_categories(update, context)
+        return
+    if data == "library:category:new":
+        context.user_data["awaiting_input"] = "library_category_name"
+        await query.message.reply_text("اسم دسته جدید را بفرست.", reply_markup=ReplyKeyboardRemove())
+        return
+    if data.startswith("library:category:select:"):
+        category_key = data.split(":", 3)[3]
+        service.set_selected_library_category(user_id, category_key)
+        await _show_category_detail(update, context, category_key)
+        return
+    if data.startswith("library:category:view:"):
+        await _show_category_detail(update, context, data.split(":", 3)[3])
+        return
+    if data.startswith("library:category:edit:"):
+        category_key = data.split(":", 3)[3]
+        context.user_data["editing_library_category_key"] = category_key
+        context.user_data["awaiting_input"] = "library_category_edit_name"
+        await query.message.reply_text("نام جدید دسته را بفرست.", reply_markup=ReplyKeyboardRemove())
+        return
+    if data.startswith("library:category:sentences:"):
+        await _show_library(update, context, page=0, category_key=data.split(":", 3)[3])
+        return
+    if data.startswith("library:category:export:"):
+        category_key = data.split(":", 3)[3]
+        export_path = service.export_category_csv(user_id, category_key)
+        await query.message.reply_document(document=str(export_path), caption="📤 خروجی CSV این دسته آماده است.")
+        return
+    if data.startswith("library:category:send_all:"):
+        category_key = data.split(":", 3)[3]
+        service.set_selected_library_category(user_id, category_key)
+        await send_all_sentences(update, context)
+        return
+    if data.startswith("library:category:import_here:"):
+        category_key = data.split(":", 3)[3]
+        import_path = Path(str(context.user_data.get("pending_import_path", "")))
+        file_name = str(context.user_data.get("pending_import_file_name", "")) or None
+        if not import_path.exists():
+            await _send_or_edit(update, "❌ فایل ایمپورت پیدا نشد. دوباره CSV را بفرست.", reply_markup=_main_menu_keyboard())
+            _reset_recipe_wizard(context)
+            return
+        result = service.import_csv_for_user(user_id, import_path, file_name, library_category_key=category_key)
+        category_summary = service.library_category_summary(user_id, result["library_category_key"])
+        context.user_data.pop("pending_import_path", None)
+        context.user_data.pop("pending_import_file_name", None)
+        await _send_or_edit(
+            update,
+            _import_result_text(result["report"], category_summary),
+            reply_markup=_post_import_keyboard(),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+    if data == "library:category:import_new":
+        context.user_data["awaiting_input"] = "import_new_category_name"
+        await query.message.reply_text("اسم دسته جدید را بفرست تا CSV داخل آن وارد شود.", reply_markup=ReplyKeyboardRemove())
+        return
     if data == "library:refresh":
-        await _show_library(update, context, page=0)
+        await _show_library(update, context, page=0, category_key=service.selected_library_category(user_id))
         return
     if data.startswith("library:page:"):
-        await _show_library(update, context, page=int(data.split(":")[2]))
+        parts = data.split(":")
+        category_key = parts[3] if len(parts) > 3 else service.selected_library_category(user_id)
+        await _show_library(update, context, page=int(parts[2]), category_key=category_key)
+        return
+    if data.startswith("library:first:"):
+        category_key = data.split(":", 2)[2]
+        await _show_library(update, context, page=0, category_key=category_key)
+        return
+    if data.startswith("library:last:"):
+        category_key = data.split(":", 2)[2]
+        page_payload = service.paginated_user_sentences(user_id, 0, int(service.get_settings(user_id).extra_config().get("page_size", SENTENCES_PAGE_SIZE)), category_key=category_key)
+        await _show_library(update, context, page=max(0, int(page_payload["total_pages"]) - 1), category_key=category_key)
         return
     if data.startswith("library:view:"):
-        await _show_sentence_detail(update, context, data.split(":", 2)[2])
+        _, _, sentence_id, category_key = (data.split(":", 3) + [service.selected_library_category(user_id)])[:4]
+        await _show_sentence_detail(update, context, sentence_id, category_key=category_key)
         return
     if data.startswith("library:send:"):
-        await _send_single_sentence(update, context, data.split(":", 2)[2])
+        _, _, sentence_id, category_key = (data.split(":", 3) + [service.selected_library_category(user_id)])[:4]
+        await _send_single_sentence(update, context, sentence_id, category_key=category_key)
         return
     if data.startswith("library:remove:"):
-        sentence_id = data.split(":", 2)[2]
-        service.remove_sentence_from_user(user_id, sentence_id)
-        await _show_library(update, context, page=0, flash=f"🗑 جمله {sentence_id} حذف شد.")
+        _, _, sentence_id, category_key = (data.split(":", 3) + [service.selected_library_category(user_id)])[:4]
+        service.remove_sentence_from_user(user_id, sentence_id, category_key=category_key)
+        await _show_library(update, context, page=0, category_key=category_key, flash=f"🗑 جمله {sentence_id} حذف شد.")
         return
     if data.startswith("library:edit:"):
-        sentence_id = data.split(":", 2)[2]
+        _, _, sentence_id, category_key = (data.split(":", 3) + [service.selected_library_category(user_id)])[:4]
         context.user_data["editing_sentence_id"] = sentence_id
+        service.set_selected_library_category(user_id, category_key)
         context.user_data["awaiting_input"] = "edit_sentence_target"
         await query.message.reply_text("متن جدید جمله در زبان مقصد را بفرست.", reply_markup=ReplyKeyboardRemove())
         return
@@ -773,13 +948,36 @@ def _recipe_wizard_keyboard(service: TelegramBotService, user_id: int, draft: di
     return InlineKeyboardMarkup(rows)
 
 
-async def _show_library(update: Update, context: ContextTypes.DEFAULT_TYPE, *, page: int, flash: str | None = None) -> None:
+async def _show_library_categories(update: Update, context: ContextTypes.DEFAULT_TYPE, flash: str | None = None) -> None:
     service = _service(context)
     user_id = _effective_user_id(update)
+    text = _library_categories_text(service, user_id, flash=flash)
+    await _send_or_edit(update, text, reply_markup=_library_categories_keyboard(service, user_id), parse_mode=ParseMode.MARKDOWN)
+
+
+async def _show_category_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, category_key: str) -> None:
+    service = _service(context)
+    user_id = _effective_user_id(update)
+    service.set_selected_library_category(user_id, category_key)
+    text = _category_detail_text(service, user_id, category_key)
+    await _send_or_edit(update, text, reply_markup=_category_detail_keyboard(service, user_id, category_key), parse_mode=ParseMode.MARKDOWN)
+
+
+async def _show_library(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    page: int,
+    category_key: str,
+    flash: str | None = None,
+) -> None:
+    service = _service(context)
+    user_id = _effective_user_id(update)
+    service.set_selected_library_category(user_id, category_key)
     settings = service.get_settings(user_id)
     page_size = int(settings.extra_config().get("page_size", SENTENCES_PAGE_SIZE))
-    page_payload = service.paginated_user_sentences(user_id, page, page_size)
-    text = _library_text(service, user_id, page_payload, flash=flash)
+    page_payload = service.paginated_user_sentences(user_id, page, page_size, category_key=category_key)
+    text = _library_text(service, user_id, page_payload, flash=flash, category_key=category_key)
     await _send_or_edit(update, text, reply_markup=_library_keyboard(service, user_id, page_payload), parse_mode=ParseMode.MARKDOWN)
 
 
@@ -799,36 +997,62 @@ async def _show_recipe_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE
 def _library_keyboard(service: TelegramBotService, user_id: int, page_payload: dict[str, object]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     target_language = service.get_target_language(user_id)
+    category_key = str(page_payload["category_key"])
     for sentence in page_payload["items"]:
         preview = service.target_text(sentence, target_language).replace("\n", " ").strip()
-        rows.append([InlineKeyboardButton(f"🎧 {sentence.id}. {preview[:45]}", callback_data=f"library:view:{sentence.id}")])
+        rows.append([InlineKeyboardButton(f"🎧 {sentence.id}. {preview[:45]}", callback_data=f"library:view:{sentence.id}:{category_key}")])
     nav_row: list[InlineKeyboardButton] = []
     page = int(page_payload["page"])
     total_pages = int(page_payload["total_pages"])
     if page > 0:
-        nav_row.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"library:page:{page - 1}"))
+        nav_row.append(InlineKeyboardButton("⏮ اول", callback_data=f"library:first:{category_key}"))
+        nav_row.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"library:page:{page - 1}:{category_key}"))
     if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton("➡️ بعدی", callback_data=f"library:page:{page + 1}"))
+        nav_row.append(InlineKeyboardButton("➡️ بعدی", callback_data=f"library:page:{page + 1}:{category_key}"))
+        nav_row.append(InlineKeyboardButton("⏭ آخر", callback_data=f"library:last:{category_key}"))
     if nav_row:
         rows.append(nav_row)
     rows.extend(
         [
             [InlineKeyboardButton("➕ افزودن جمله جدید", callback_data="library:add")],
-            [InlineKeyboardButton("🔄 تازه‌سازی", callback_data="library:refresh")],
+            [InlineKeyboardButton("🔄 تازه‌سازی", callback_data="library:refresh"), InlineKeyboardButton("📂 دسته‌ها", callback_data="library:categories")],
             [InlineKeyboardButton("🏠 منوی اصلی", callback_data="settings:back")],
         ]
     )
     return InlineKeyboardMarkup(rows)
 
 
-async def _show_sentence_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, sentence_id: str) -> None:
+def _library_categories_keyboard(service: TelegramBotService, user_id: int) -> InlineKeyboardMarkup:
+    selected = service.selected_library_category(user_id)
+    rows: list[list[InlineKeyboardButton]] = []
+    for category in service.list_library_categories(user_id):
+        badge = "✅" if category.key == selected else "▫️"
+        rows.append([InlineKeyboardButton(f"{badge} {category.display_name} ({category.sentence_count})", callback_data=f"library:category:view:{category.key}")])
+    rows.append([InlineKeyboardButton("➕ ساخت دسته جدید", callback_data="library:category:new")])
+    rows.append([InlineKeyboardButton("🏠 منوی اصلی", callback_data="settings:back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _category_detail_keyboard(service: TelegramBotService, user_id: int, category_key: str) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton("📄 دیدن جمله‌ها", callback_data=f"library:category:sentences:{category_key}")],
+        [InlineKeyboardButton("🎧 تولید همه صداها", callback_data=f"library:category:send_all:{category_key}"), InlineKeyboardButton("📤 خروجی CSV", callback_data=f"library:category:export:{category_key}")],
+    ]
+    if category_key != ALL_SENTENCES_CATEGORY_KEY:
+        rows.append([InlineKeyboardButton("✏️ ویرایش نام دسته", callback_data=f"library:category:edit:{category_key}")])
+    rows.append([InlineKeyboardButton("⬅️ بازگشت به دسته‌ها", callback_data="library:categories")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _show_sentence_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, sentence_id: str, *, category_key: str) -> None:
     service = _service(context)
     user_id = _effective_user_id(update)
     target_language = service.get_target_language(user_id)
-    sentence = next((item for item in service.list_user_sentences(user_id) if item.id == sentence_id), None)
+    sentence = next((item for item in service.list_user_sentences(user_id, category_key=category_key) if item.id == sentence_id), None)
     if sentence is None:
         await _send_or_edit(update, "❌ این جمله پیدا نشد.", reply_markup=_main_menu_keyboard())
         return
+    descriptor = service.describe_library_category(user_id, category_key)
     target_label = service.target_language_label(target_language)
     text = (
         f"*Sentence {sentence.id}*\n\n"
@@ -836,25 +1060,26 @@ async def _show_sentence_detail(update: Update, context: ContextTypes.DEFAULT_TY
         f"🇮🇷 فارسی: {sentence.persian or '-'}\n"
         f"🇬🇧 English: {sentence.english or '-'}\n"
         f"🇫🇷 Français: {sentence.french or '-'}\n\n"
+        f"📚 Library category: `{escape_markdown(descriptor.display_name)}`\n"
         f"🏷 Level: `{sentence.level}`\n"
         f"📂 Category: `{sentence.category}`"
     )
     keyboard = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🎧 تولید و ارسال", callback_data=f"library:send:{sentence.id}")],
-            [InlineKeyboardButton("✏️ ادیت جمله", callback_data=f"library:edit:{sentence.id}")],
-            [InlineKeyboardButton("🗑 حذف", callback_data=f"library:remove:{sentence.id}")],
-            [InlineKeyboardButton("⬅️ بازگشت", callback_data="menu:library")],
+            [InlineKeyboardButton("🎧 تولید و ارسال", callback_data=f"library:send:{sentence.id}:{category_key}")],
+            [InlineKeyboardButton("✏️ ادیت جمله", callback_data=f"library:edit:{sentence.id}:{category_key}")],
+            [InlineKeyboardButton("🗑 حذف از این دسته", callback_data=f"library:remove:{sentence.id}:{category_key}")],
+            [InlineKeyboardButton("⬅️ بازگشت", callback_data=f"library:category:sentences:{category_key}")],
         ]
     )
     await _send_or_edit(update, text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
 
 
-async def _send_single_sentence(update: Update, context: ContextTypes.DEFAULT_TYPE, sentence_id: str) -> None:
+async def _send_single_sentence(update: Update, context: ContextTypes.DEFAULT_TYPE, sentence_id: str, *, category_key: str) -> None:
     service = _service(context)
     await _send_or_edit(update, f"🎙 در حال ساخت فایل صوتی جمله `{sentence_id}` ...", parse_mode=ParseMode.MARKDOWN)
     await context.bot.send_chat_action(chat_id=_chat_id(update), action=ChatAction.UPLOAD_VOICE)
-    payload = service.generate_sentence_audio_for_user(_effective_user_id(update), sentence_id)
+    payload = service.generate_sentence_audio_for_user(_effective_user_id(update), sentence_id, library_category_key=category_key)
     with payload["audio_path"].open("rb") as handle:
         await context.bot.send_audio(chat_id=_chat_id(update), audio=handle, caption=f"{payload['caption']}\n\n🎼 {payload['recipe_name']}")
     await context.bot.send_message(chat_id=_chat_id(update), text="✅ فایل ارسال شد.", reply_markup=MENU_KEYBOARD)
@@ -890,10 +1115,12 @@ def _welcome_text(service: TelegramBotService, user_id: int) -> str:
     latest_import = service.latest_import_summary(user_id)
     import_line = latest_import["file_name"] if latest_import else "هنوز CSV وارد نشده"
     target_language = service.get_target_language(user_id)
+    selected_category = service.describe_library_category(user_id, service.selected_library_category(user_id))
     return (
         "🌿 *به EchoLingua Bot خوش آمدی*\n\n"
-        "CSV وارد کن، کتابخانه بساز، جمله‌ها را ادیت کن، و برای زبان مقصد انتخابی‌ات ویس بگیر.\n\n"
+        "CSV وارد کن، دسته بساز، جمله‌ها را در دسته‌های مختلف نگه دار، و برای هر دسته خروجی و ویس بگیر.\n\n"
         f"📚 تعداد جمله‌ها: `{summary['count']}`\n"
+        f"📂 دسته فعال: `{escape_markdown(selected_category.display_name)}`\n"
         f"🌍 زبان مقصد: `{escape_markdown(service.target_language_label(target_language))}`\n"
         f"🎼 Recipe: `{escape_markdown(settings.selected_recipe)}`\n"
         f"🗣 Provider: `{escape_markdown(settings.selected_provider)}`\n"
@@ -906,10 +1133,11 @@ def _help_text() -> str:
     return (
         "🧭 *راهنما*\n\n"
         "1. CSV را ایمپورت کن.\n"
-        "2. از تنظیمات، زبان مقصد را انتخاب کن.\n"
-        "3. در کتابخانه جمله‌ها را ببین، ویرایش کن، حذف کن یا ویس بگیر.\n"
-        "4. برای افزودن جمله جدید، فقط متن مقصد و ترجمه فارسی را بفرست.\n"
-        "5. از بخش Recipe می‌توانی recipeهای موجود را هم برای فاصله‌ها تنظیم کنی."
+        "2. برای CSV یک دسته موجود را انتخاب کن یا یک دسته جدید بساز.\n"
+        "3. از بخش کتابخانه، دسته‌ها را باز کن و آمار و جمله‌های هر دسته را ببین.\n"
+        "4. برای هر دسته می‌توانی خروجی CSV و تولید همه صداها بگیری.\n"
+        "5. برای افزودن جمله جدید، فقط متن مقصد و ترجمه فارسی را بفرست.\n"
+        "6. از بخش Recipe می‌توانی recipeهای موجود را هم برای فاصله‌ها تنظیم کنی."
     )
 
 
@@ -1011,16 +1239,61 @@ def _recipe_wizard_text(service: TelegramBotService, user_id: int, draft: dict[s
     )
 
 
-def _library_text(service: TelegramBotService, user_id: int, page_payload: dict[str, object], flash: str | None = None) -> str:
-    summary = service.sentence_summary(user_id)
+def _library_categories_text(service: TelegramBotService, user_id: int, flash: str | None = None) -> str:
+    categories = service.list_library_categories(user_id)
+    selected = service.describe_library_category(user_id, service.selected_library_category(user_id))
+    lines = [
+        "📚 *دسته‌های کتابخانه*",
+        "",
+        f"تعداد دسته‌ها: `{len(categories)}`",
+        f"دسته فعال: `{escape_markdown(selected.display_name)}`",
+        "",
+    ]
+    if flash:
+        lines.append(f"{escape_markdown(flash)}\n")
+    for category in categories:
+        lines.append(
+            f"`{escape_markdown(category.display_name)}` | items=`{category.sentence_count}` | target=`{escape_markdown(category.target_language)}`"
+        )
+    return "\n".join(lines)
+
+
+def _category_detail_text(service: TelegramBotService, user_id: int, category_key: str) -> str:
+    summary = service.library_category_summary(user_id, category_key)
+    recipe_usage = ", ".join(f"{key}:{value}" for key, value in summary["recipe_usage"].items()) or "-"
+    content_categories = ", ".join(f"{key}:{value}" for key, value in summary["content_categories"].items()) or "-"
+    levels = ", ".join(f"{key}:{value}" for key, value in summary["levels"].items()) or "-"
+    return (
+        f"📂 *{escape_markdown(summary['display_name'])}*\n\n"
+        f"Key: `{escape_markdown(summary['key'])}`\n"
+        f"Items: `{summary['sentence_count']}`\n"
+        f"Target language: `{escape_markdown(summary['target_language'])}`\n"
+        f"Description: `{escape_markdown(summary['description'] or '-')}`\n"
+        f"Recipe usage: `{escape_markdown(recipe_usage)}`\n"
+        f"Content categories: `{escape_markdown(content_categories)}`\n"
+        f"Levels: `{escape_markdown(levels)}`\n"
+        f"Languages: `fa={summary['language_counts']['persian_non_empty']}, en={summary['language_counts']['english_non_empty']}, fr={summary['language_counts']['french_non_empty']}`"
+    )
+
+
+def _library_text(
+    service: TelegramBotService,
+    user_id: int,
+    page_payload: dict[str, object],
+    *,
+    category_key: str,
+    flash: str | None = None,
+) -> str:
+    summary = service.sentence_summary(user_id, category_key=category_key)
     latest_import = service.latest_import_summary(user_id)
     import_line = latest_import["file_name"] if latest_import else "-"
+    descriptor = service.describe_library_category(user_id, category_key)
     page = int(page_payload["page"]) + 1
     total_pages = int(page_payload["total_pages"])
     lines = [
-        "📚 *کتابخانه شما*",
+        f"📚 *جمله‌های دسته {escape_markdown(descriptor.display_name)}*",
         "",
-        f"تعداد کل جمله‌ها: `{summary['count']}`",
+        f"تعداد جمله‌های این دسته: `{summary['count']}`",
         f"صفحه: `{page}/{total_pages}`",
         f"آخرین CSV: `{escape_markdown(import_line)}`",
         f"زبان مقصد فعلی: `{escape_markdown(service.target_language_label(service.get_target_language(user_id)))}`",
@@ -1034,8 +1307,42 @@ def _library_text(service: TelegramBotService, user_id: int, page_payload: dict[
             f"`{escape_markdown(sentence.id)}`  {escape_markdown(target_text)}"
         )
     if not page_payload["items"]:
-        lines.append("هنوز کتابخانه‌ات خالی است.")
+        lines.append("هنوز این دسته جمله‌ای ندارد.")
     return "\n".join(lines)
+
+
+def _import_category_text(service: TelegramBotService, user_id: int) -> str:
+    categories = service.list_library_categories(user_id)
+    selected = service.describe_library_category(user_id, service.selected_library_category(user_id))
+    return (
+        "📥 *انتخاب دسته برای CSV*\n\n"
+        f"دسته‌های موجود: `{len(categories)}`\n"
+        f"دسته فعال فعلی: `{escape_markdown(selected.display_name)}`\n"
+        "یک دسته موجود را انتخاب کن یا یک دسته جدید بساز."
+    )
+
+
+def _import_category_keyboard(service: TelegramBotService, user_id: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for category in service.list_library_categories(user_id):
+        if category.key == ALL_SENTENCES_CATEGORY_KEY:
+            continue
+        rows.append([InlineKeyboardButton(f"📂 {category.display_name}", callback_data=f"library:category:import_here:{category.key}")])
+    rows.append([InlineKeyboardButton("➕ ساخت دسته جدید برای این CSV", callback_data="library:category:import_new")])
+    rows.append([InlineKeyboardButton("لغو", callback_data="settings:back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _import_result_text(report: Any, category_summary: dict[str, Any]) -> str:
+    return (
+        "✅ *ایمپورت انجام شد*\n\n"
+        f"Rows: `{report.total_rows}`\n"
+        f"Enabled: `{report.enabled_rows}`\n"
+        f"Imported into: `{escape_markdown(category_summary['display_name'])}`\n"
+        f"Items in category: `{category_summary['sentence_count']}`\n"
+        f"Levels: `{escape_markdown(', '.join(f'{k}:{v}' for k, v in category_summary['levels'].items()) or '-')}`\n"
+        f"Content categories: `{escape_markdown(', '.join(f'{k}:{v}' for k, v in category_summary['content_categories'].items()) or '-')}`"
+    )
 
 
 async def _parse_positive_int(update: Update, label: str) -> int | None:
@@ -1052,8 +1359,17 @@ async def _parse_positive_int(update: Update, label: str) -> int | None:
 
 
 def main() -> None:
-    application = build_application()
-    application.run_polling()
+    _configure_logging()
+    config = load_config()
+    startup_proxy_url = _resolve_startup_proxy_url(config)
+    application = build_application(config=config, proxy_url_override=startup_proxy_url)
+    try:
+        application.run_polling()
+    except TelegramNetworkError:
+        if startup_proxy_url is None or not config.telegram_bot_proxy_url.strip():
+            raise
+        LOGGER.exception("Telegram bot polling failed after proxy fallback.")
+        raise
 
 
 if __name__ == "__main__":

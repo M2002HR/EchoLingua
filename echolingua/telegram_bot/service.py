@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import re
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,12 @@ from echolingua.sentences.loader import load_sentences_with_report
 from echolingua.sentences.repository import SentenceRepository
 from echolingua.sentences.validator import Sentence
 from echolingua.storage.db import Database
-from echolingua.storage.repositories import StorageRepositories, TelegramUserRecipe, TelegramUserSettings
+from echolingua.storage.repositories import (
+    StorageRepositories,
+    TelegramLibraryCategory,
+    TelegramUserRecipe,
+    TelegramUserSettings,
+)
 
 TARGET_LANGUAGES: dict[str, dict[str, str]] = {
     "fr": {"field": "french", "label": "Français", "emoji": "🇫🇷"},
@@ -28,6 +34,10 @@ GUIDED_RECIPE_TEMPLATES: dict[str, dict[str, str]] = {
     "ladder": {"label": "Ladder", "description": "Prompt + normal + word-by-word + slow + final"},
     "listen_repeat": {"label": "Listen & Repeat", "description": "Prompt + normal + pause + repeat"},
 }
+
+ALL_SENTENCES_CATEGORY_KEY = "all"
+DEFAULT_LIBRARY_CATEGORY_KEY = "general"
+DEFAULT_LIBRARY_CATEGORY_NAME = "General"
 
 
 @dataclass(frozen=True)
@@ -51,6 +61,16 @@ class RecipeDescriptor:
     editable: bool
 
 
+@dataclass(frozen=True)
+class LibraryCategoryDescriptor:
+    key: str
+    display_name: str
+    target_language: str
+    description: str
+    sentence_count: int
+    is_virtual: bool = False
+
+
 class TelegramBotService:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
@@ -63,6 +83,17 @@ class TelegramBotService:
         self.config.telegram_import_dir.mkdir(parents=True, exist_ok=True)
         self.config.telegram_export_dir.mkdir(parents=True, exist_ok=True)
         self.config.telegram_temp_audio_dir.mkdir(parents=True, exist_ok=True)
+        self.config.telegram_import_dir.mkdir(parents=True, exist_ok=True)
+
+    def _ensure_default_category(self, telegram_user_id: int, target_language: str | None = None) -> None:
+        language = target_language or self.get_target_language(telegram_user_id)
+        self.repositories.ensure_telegram_library_category(
+            telegram_user_id,
+            DEFAULT_LIBRARY_CATEGORY_KEY,
+            DEFAULT_LIBRARY_CATEGORY_NAME,
+            target_language=language,
+            description="Default user category.",
+        )
 
     def ensure_user(
         self,
@@ -91,9 +122,130 @@ class TelegramBotService:
         if "page_size" not in extra:
             extra["page_size"] = 8
             changed = True
+        if "selected_library_category" not in extra:
+            extra["selected_library_category"] = ALL_SENTENCES_CATEGORY_KEY
+            changed = True
         if changed:
             self.repositories.update_telegram_user_settings(telegram_user_id, extra_config=extra)
+        self._ensure_default_category(telegram_user_id, str(extra.get("target_language", "fr")))
         return self.repositories.get_telegram_user_settings(telegram_user_id)
+
+    def selected_library_category(self, telegram_user_id: int) -> str:
+        settings = self.get_settings(telegram_user_id)
+        category_key = str(settings.extra_config().get("selected_library_category", ALL_SENTENCES_CATEGORY_KEY) or ALL_SENTENCES_CATEGORY_KEY)
+        if category_key != ALL_SENTENCES_CATEGORY_KEY and self.repositories.get_telegram_library_category(telegram_user_id, category_key) is None:
+            return ALL_SENTENCES_CATEGORY_KEY
+        return category_key
+
+    def set_selected_library_category(self, telegram_user_id: int, category_key: str) -> TelegramUserSettings:
+        if category_key != ALL_SENTENCES_CATEGORY_KEY:
+            category = self.repositories.get_telegram_library_category(telegram_user_id, category_key)
+            if category is None:
+                raise ValidationError(f"Unknown library category: {category_key}")
+        settings = self.get_settings(telegram_user_id)
+        extra = settings.extra_config()
+        extra["selected_library_category"] = category_key
+        return self.update_settings(telegram_user_id, extra_config=extra)
+
+    def create_library_category(
+        self,
+        telegram_user_id: int,
+        name: str,
+        *,
+        target_language: str | None = None,
+        description: str = "",
+    ) -> LibraryCategoryDescriptor:
+        display_name = name.strip()
+        if not display_name:
+            raise ValidationError("Category name is required.")
+        category_key = self._slugify_category_key(display_name)
+        if category_key == ALL_SENTENCES_CATEGORY_KEY:
+            category_key = f"{category_key}_group"
+        if self.repositories.get_telegram_library_category(telegram_user_id, category_key) is not None:
+            raise ValidationError(f"Category already exists: {display_name}")
+        self.repositories.ensure_telegram_library_category(
+            telegram_user_id,
+            category_key,
+            display_name,
+            target_language=target_language or self.get_target_language(telegram_user_id),
+            description=description.strip(),
+        )
+        self.set_selected_library_category(telegram_user_id, category_key)
+        return self.describe_library_category(telegram_user_id, category_key)
+
+    def update_library_category(
+        self,
+        telegram_user_id: int,
+        category_key: str,
+        *,
+        display_name: str | None = None,
+        target_language: str | None = None,
+        description: str | None = None,
+    ) -> LibraryCategoryDescriptor:
+        if category_key == ALL_SENTENCES_CATEGORY_KEY:
+            raise ValidationError("The all sentences category cannot be edited.")
+        current = self.repositories.get_telegram_library_category(telegram_user_id, category_key)
+        if current is None:
+            raise ValidationError(f"Unknown library category: {category_key}")
+        if display_name is not None and not display_name.strip():
+            raise ValidationError("Category name is required.")
+        self.repositories.update_telegram_library_category(
+            telegram_user_id,
+            category_key,
+            display_name=display_name.strip() if display_name is not None else None,
+            target_language=target_language,
+            description=description.strip() if description is not None else None,
+        )
+        return self.describe_library_category(telegram_user_id, category_key)
+
+    def list_library_categories(self, telegram_user_id: int) -> list[LibraryCategoryDescriptor]:
+        self._ensure_default_category(telegram_user_id)
+        sentence_counts = self.repositories.category_sentence_counts(telegram_user_id)
+        categories = [
+            LibraryCategoryDescriptor(
+                key=ALL_SENTENCES_CATEGORY_KEY,
+                display_name="All Sentences",
+                target_language=self.get_target_language(telegram_user_id),
+                description="Virtual category containing the full user library.",
+                sentence_count=len(self.list_user_sentences(telegram_user_id)),
+                is_virtual=True,
+            )
+        ]
+        for category in self.repositories.list_telegram_library_categories(telegram_user_id):
+            categories.append(
+                LibraryCategoryDescriptor(
+                    key=category.category_key,
+                    display_name=category.display_name,
+                    target_language=category.target_language,
+                    description=category.description,
+                    sentence_count=sentence_counts.get(category.category_key, 0),
+                    is_virtual=False,
+                )
+            )
+        return categories
+
+    def describe_library_category(self, telegram_user_id: int, category_key: str) -> LibraryCategoryDescriptor:
+        if category_key == ALL_SENTENCES_CATEGORY_KEY:
+            return LibraryCategoryDescriptor(
+                key=ALL_SENTENCES_CATEGORY_KEY,
+                display_name="All Sentences",
+                target_language=self.get_target_language(telegram_user_id),
+                description="Virtual category containing the full user library.",
+                sentence_count=len(self.list_user_sentences(telegram_user_id)),
+                is_virtual=True,
+            )
+        category = self.repositories.get_telegram_library_category(telegram_user_id, category_key)
+        if category is None:
+            raise ValidationError(f"Unknown library category: {category_key}")
+        counts = self.repositories.category_sentence_counts(telegram_user_id)
+        return LibraryCategoryDescriptor(
+            key=category.category_key,
+            display_name=category.display_name,
+            target_language=category.target_language,
+            description=category.description,
+            sentence_count=counts.get(category.category_key, 0),
+            is_virtual=False,
+        )
 
     def get_settings(self, telegram_user_id: int) -> TelegramUserSettings:
         return self.repositories.get_telegram_user_settings(telegram_user_id)
@@ -102,13 +254,28 @@ class TelegramBotService:
         self.repositories.update_telegram_user_settings(telegram_user_id, **kwargs)
         return self.repositories.get_telegram_user_settings(telegram_user_id)
 
-    def import_csv_for_user(self, telegram_user_id: int, source_path: Path, file_name: str | None = None) -> dict[str, Any]:
+    def import_csv_for_user(
+        self,
+        telegram_user_id: int,
+        source_path: Path,
+        file_name: str | None = None,
+        *,
+        library_category_key: str | None = None,
+        new_category_name: str | None = None,
+        replace_existing_category: bool = True,
+    ) -> dict[str, Any]:
         job_id = f"telegram-import-{telegram_user_id}"
         with self.logger.trace(
             "telegram.import_csv_for_user",
             component="telegram.service",
             job_id=job_id,
-            metadata={"telegram_user_id": telegram_user_id, "source_path": str(source_path), "file_name": file_name},
+            metadata={
+                "telegram_user_id": telegram_user_id,
+                "source_path": str(source_path),
+                "file_name": file_name,
+                "library_category_key": library_category_key,
+                "new_category_name": new_category_name,
+            },
         ) as trace:
             stored_path = self.config.telegram_import_dir / (file_name or source_path.name)
             with trace.span("telegram.copy_import_file", component="telegram.service", payload={"stored_path": str(stored_path)}) as span:
@@ -123,41 +290,66 @@ class TelegramBotService:
             with trace.span("telegram.persist_import_sentences", component="telegram.service", payload={"telegram_user_id": telegram_user_id}) as span:
                 self._persist_sentences(sentences)
                 enabled_sentences = [sentence for sentence in sentences if sentence.enabled]
-                self.repositories.replace_telegram_sentence_library(telegram_user_id, enabled_sentences, source_type="csv_import")
-                self.repositories.replace_user_sentences(
+                for sentence in enabled_sentences:
+                    self.repositories.upsert_telegram_sentence(telegram_user_id, sentence, source_type="csv_import")
+                self.repositories.add_user_sentences(
                     telegram_user_id,
                     [sentence.id for sentence in enabled_sentences],
                     source_type="csv_import",
                 )
+                resolved_category_key = self._resolve_import_category(
+                    telegram_user_id,
+                    library_category_key=library_category_key,
+                    new_category_name=new_category_name,
+                )
+                if replace_existing_category:
+                    self.repositories.replace_category_sentences(
+                        telegram_user_id,
+                        resolved_category_key,
+                        [sentence.id for sentence in enabled_sentences],
+                        source_type="csv_import",
+                    )
+                else:
+                    self.repositories.add_sentences_to_category(
+                        telegram_user_id,
+                        resolved_category_key,
+                        [sentence.id for sentence in enabled_sentences],
+                        source_type="csv_import",
+                    )
                 self.repositories.record_telegram_csv_import(
                     telegram_user_id,
                     file_name or source_path.name,
                     stored_path,
                     [sentence.id for sentence in enabled_sentences],
+                    library_category_key=resolved_category_key,
                 )
-                span.set_result(imported_sentence_count=len(enabled_sentences))
+                self.set_selected_library_category(telegram_user_id, resolved_category_key)
+                span.set_result(imported_sentence_count=len(enabled_sentences), library_category_key=resolved_category_key)
             trace.set_summary(
                 telegram_user_id=telegram_user_id,
                 imported_sentence_count=len(enabled_sentences),
                 file_name=file_name or source_path.name,
                 stored_path=str(stored_path),
+                library_category_key=resolved_category_key,
             )
             return {
                 "path": stored_path,
                 "report": report,
                 "imported_sentence_ids": [sentence.id for sentence in enabled_sentences],
+                "library_category_key": resolved_category_key,
             }
 
-    def export_user_csv(self, telegram_user_id: int) -> Path:
+    def export_user_csv(self, telegram_user_id: int, category_key: str = ALL_SENTENCES_CATEGORY_KEY) -> Path:
         job_id = f"telegram-export-{telegram_user_id}"
         with self.logger.trace(
             "telegram.export_user_csv",
             component="telegram.service",
             job_id=job_id,
-            metadata={"telegram_user_id": telegram_user_id},
+            metadata={"telegram_user_id": telegram_user_id, "category_key": category_key},
         ) as trace:
-            sentences = self.list_user_sentences(telegram_user_id)
-            export_path = self.config.telegram_export_dir / f"user_{telegram_user_id}_sentences.csv"
+            descriptor = self.describe_library_category(telegram_user_id, category_key)
+            sentences = self.list_user_sentences(telegram_user_id, category_key=category_key)
+            export_path = self.config.telegram_export_dir / f"user_{telegram_user_id}_{descriptor.key}_sentences.csv"
             with trace.span("telegram.write_export_csv", component="telegram.service", payload={"export_path": str(export_path)}) as span:
                 with export_path.open("w", encoding="utf-8", newline="") as handle:
                     writer = csv.writer(handle)
@@ -198,21 +390,32 @@ class TelegramBotService:
                                 sentence.pronunciation_note,
                             ]
                         )
-                span.set_result(export_path=str(export_path), sentence_count=len(sentences))
-            trace.set_summary(telegram_user_id=telegram_user_id, export_path=str(export_path), sentence_count=len(sentences))
+                span.set_result(export_path=str(export_path), sentence_count=len(sentences), category_key=category_key)
+            trace.set_summary(
+                telegram_user_id=telegram_user_id,
+                export_path=str(export_path),
+                sentence_count=len(sentences),
+                category_key=category_key,
+            )
             return export_path
 
-    def list_user_sentences(self, telegram_user_id: int) -> list[Sentence]:
-        sentence_ids = self.repositories.list_user_sentence_ids(telegram_user_id)
+    def list_user_sentences(self, telegram_user_id: int, category_key: str = ALL_SENTENCES_CATEGORY_KEY) -> list[Sentence]:
+        sentence_ids = (
+            self.repositories.list_user_sentence_ids(telegram_user_id)
+            if category_key == ALL_SENTENCES_CATEGORY_KEY
+            else self.repositories.list_category_sentence_ids(telegram_user_id, category_key)
+        )
         by_id = {sentence.id: sentence for sentence in self.repositories.list_telegram_sentences(telegram_user_id)}
         return [by_id[sentence_id] for sentence_id in sentence_ids if sentence_id in by_id]
 
-    def add_sentence_to_user(self, telegram_user_id: int, sentence_id: str) -> None:
+    def add_sentence_to_user(self, telegram_user_id: int, sentence_id: str, category_key: str = DEFAULT_LIBRARY_CATEGORY_KEY) -> None:
         sentence = self._sentence_by_id(sentence_id)
         if sentence is None:
             raise ValidationError(f"Unknown sentence id: {sentence_id}")
         self.repositories.upsert_telegram_sentence(telegram_user_id, sentence, source_type="manual")
         self.repositories.add_user_sentences(telegram_user_id, [sentence_id], source_type="manual")
+        self._ensure_default_category(telegram_user_id)
+        self.repositories.add_sentences_to_category(telegram_user_id, category_key, [sentence_id], source_type="manual")
 
     def add_sentence_from_target_text(
         self,
@@ -224,6 +427,7 @@ class TelegramBotService:
         english_text: str | None = None,
         level: str = "custom",
         category: str = "custom",
+        library_category_key: str | None = None,
     ) -> Sentence:
         target_text = target_text.strip()
         translation_text = translation_text.strip()
@@ -265,6 +469,11 @@ class TelegramBotService:
         )
         self.repositories.upsert_telegram_sentence(telegram_user_id, sentence, source_type="manual_text")
         self.repositories.add_user_sentences(telegram_user_id, [sentence.id], source_type="manual_text")
+        resolved_category_key = library_category_key or self.selected_library_category(telegram_user_id)
+        if resolved_category_key == ALL_SENTENCES_CATEGORY_KEY:
+            resolved_category_key = DEFAULT_LIBRARY_CATEGORY_KEY
+        self._ensure_default_category(telegram_user_id, target_language)
+        self.repositories.add_sentences_to_category(telegram_user_id, resolved_category_key, [sentence.id], source_type="manual_text")
         if existing is None:
             self._persist_sentences([sentence])
         return sentence
@@ -292,14 +501,25 @@ class TelegramBotService:
         self.repositories.upsert_telegram_sentence(telegram_user_id, updated, source_type="manual_edit")
         return updated
 
-    def remove_sentence_from_user(self, telegram_user_id: int, sentence_id: str) -> None:
-        self.repositories.remove_user_sentence(telegram_user_id, sentence_id)
+    def remove_sentence_from_user(
+        self,
+        telegram_user_id: int,
+        sentence_id: str,
+        category_key: str = ALL_SENTENCES_CATEGORY_KEY,
+    ) -> None:
+        if category_key == ALL_SENTENCES_CATEGORY_KEY:
+            self.repositories.remove_user_sentence(telegram_user_id, sentence_id)
+            for category in self.repositories.list_telegram_library_categories(telegram_user_id):
+                self.repositories.remove_sentence_from_category(telegram_user_id, category.category_key, sentence_id)
+            return
+        self.repositories.remove_sentence_from_category(telegram_user_id, category_key, sentence_id)
 
     def generate_sentence_audio_for_user(
         self,
         telegram_user_id: int,
         sentence_id: str,
         *,
+        library_category_key: str = ALL_SENTENCES_CATEGORY_KEY,
         recipe_name: str | None = None,
         provider_name: str | None = None,
         output_format: str | None = None,
@@ -312,13 +532,14 @@ class TelegramBotService:
             metadata={
                 "telegram_user_id": telegram_user_id,
                 "sentence_id": sentence_id,
+                "library_category_key": library_category_key,
                 "recipe_name": recipe_name,
                 "provider_name": provider_name,
                 "output_format": output_format,
             },
         ) as trace:
             settings = self.get_settings(telegram_user_id)
-            sentence = next((item for item in self.list_user_sentences(telegram_user_id) if item.id == sentence_id), None)
+            sentence = next((item for item in self.list_user_sentences(telegram_user_id, category_key=library_category_key) if item.id == sentence_id), None)
             if sentence is None:
                 raise ValidationError(f"Sentence {sentence_id} is not in the user's list.")
             output_dir = self.config.telegram_temp_audio_dir / str(telegram_user_id)
@@ -350,12 +571,22 @@ class TelegramBotService:
                 "recipe_name": recipe_payload["recipe_name"],
                 "recipe_summary": recipe_payload["summary"],
             }
+            if library_category_key != ALL_SENTENCES_CATEGORY_KEY:
+                self.repositories.record_category_activity(
+                    telegram_user_id,
+                    library_category_key,
+                    recipe_name=payload["recipe_name"],
+                    action="generate_sentence",
+                    target_language=target_language,
+                    sentence_id=sentence.id,
+                )
             trace.set_summary(
                 telegram_user_id=telegram_user_id,
                 sentence_id=sentence_id,
                 audio_path=str(payload["audio_path"]),
                 manifest_path=str(payload["manifest_path"]),
                 recipe_name=payload["recipe_name"],
+                library_category_key=library_category_key,
             )
             return payload
 
@@ -448,14 +679,22 @@ class TelegramBotService:
             "file_path": record.file_path,
             "imported_rows": record.imported_rows,
             "imported_sentence_ids": record.imported_sentence_ids,
+            "library_category_key": record.library_category_key,
             "created_at": record.created_at,
         }
 
-    def paginated_user_sentences(self, telegram_user_id: int, page: int, page_size: int | None = None) -> dict[str, Any]:
+    def paginated_user_sentences(
+        self,
+        telegram_user_id: int,
+        page: int,
+        page_size: int | None = None,
+        *,
+        category_key: str = ALL_SENTENCES_CATEGORY_KEY,
+    ) -> dict[str, Any]:
         settings = self.get_settings(telegram_user_id)
         configured_page_size = int(settings.extra_config().get("page_size", page_size or 8))
         page_size_value = max(1, min(20, configured_page_size))
-        sentences = self.list_user_sentences(telegram_user_id)
+        sentences = self.list_user_sentences(telegram_user_id, category_key=category_key)
         total_items = len(sentences)
         total_pages = max(1, (total_items + page_size_value - 1) // page_size_value) if total_items else 1
         normalized_page = max(0, min(page, total_pages - 1))
@@ -467,10 +706,11 @@ class TelegramBotService:
             "page_size": page_size_value,
             "total_items": total_items,
             "total_pages": total_pages,
+            "category_key": category_key,
         }
 
-    def sentence_summary(self, telegram_user_id: int) -> dict[str, Any]:
-        sentences = self.list_user_sentences(telegram_user_id)
+    def sentence_summary(self, telegram_user_id: int, category_key: str = ALL_SENTENCES_CATEGORY_KEY) -> dict[str, Any]:
+        sentences = self.list_user_sentences(telegram_user_id, category_key=category_key)
         levels: dict[str, int] = {}
         categories: dict[str, int] = {}
         for sentence in sentences:
@@ -481,6 +721,66 @@ class TelegramBotService:
             "levels": dict(sorted(levels.items())),
             "categories": dict(sorted(categories.items())),
         }
+
+    def library_category_summary(self, telegram_user_id: int, category_key: str) -> dict[str, Any]:
+        descriptor = self.describe_library_category(telegram_user_id, category_key)
+        sentences = self.list_user_sentences(telegram_user_id, category_key=category_key)
+        levels = Counter(sentence.level for sentence in sentences)
+        content_categories = Counter(sentence.category for sentence in sentences)
+        recipe_usage = (
+            {}
+            if category_key == ALL_SENTENCES_CATEGORY_KEY
+            else self.repositories.list_category_activity_counts(telegram_user_id, category_key, group_by="recipe_name")
+        )
+        language_counts = {
+            "persian_non_empty": sum(1 for sentence in sentences if sentence.persian.strip()),
+            "english_non_empty": sum(1 for sentence in sentences if sentence.english.strip()),
+            "french_non_empty": sum(1 for sentence in sentences if sentence.french.strip()),
+        }
+        return {
+            "key": descriptor.key,
+            "display_name": descriptor.display_name,
+            "target_language": descriptor.target_language,
+            "description": descriptor.description,
+            "sentence_count": descriptor.sentence_count,
+            "is_virtual": descriptor.is_virtual,
+            "levels": dict(sorted(levels.items())),
+            "content_categories": dict(sorted(content_categories.items())),
+            "recipe_usage": dict(sorted(recipe_usage.items())),
+            "language_counts": language_counts,
+            "difficulty_counts": self._counter_dict(Counter(str(sentence.difficulty) for sentence in sentences)),
+            "priority_counts": self._counter_dict(Counter(str(sentence.priority) for sentence in sentences)),
+        }
+
+    def export_category_csv(self, telegram_user_id: int, category_key: str) -> Path:
+        return self.export_user_csv(telegram_user_id, category_key)
+
+    def generate_all_sentence_audio_for_category(
+        self,
+        telegram_user_id: int,
+        category_key: str,
+    ) -> list[dict[str, Any]]:
+        sentences = self.list_user_sentences(telegram_user_id, category_key=category_key)
+        if not sentences:
+            return []
+        target_language = self.get_target_language(telegram_user_id)
+        payloads: list[dict[str, Any]] = []
+        for sentence in sentences:
+            payload = self.generate_sentence_audio_for_user(
+                telegram_user_id,
+                sentence.id,
+                library_category_key=category_key,
+            )
+            payloads.append(payload)
+        if category_key != ALL_SENTENCES_CATEGORY_KEY and payloads:
+            self.repositories.record_category_activity(
+                telegram_user_id,
+                category_key,
+                recipe_name=payloads[0]["recipe_name"],
+                action="generate_all",
+                target_language=target_language,
+            )
+        return payloads
 
     def guided_recipe_defaults(self, telegram_user_id: int, template_key: str = "ladder") -> dict[str, Any]:
         target_language = self.get_target_language(telegram_user_id)
@@ -1027,6 +1327,37 @@ class TelegramBotService:
             f"{str(payload['name'])}: " + " -> ".join(stages) +
             f". Pause {payload['pause_between_ms']}ms, word pause {payload['word_pause_ms']}ms."
         )
+
+    def _resolve_import_category(
+        self,
+        telegram_user_id: int,
+        *,
+        library_category_key: str | None,
+        new_category_name: str | None,
+    ) -> str:
+        if new_category_name and new_category_name.strip():
+            return self.create_library_category(
+                telegram_user_id,
+                new_category_name,
+                target_language=self.get_target_language(telegram_user_id),
+            ).key
+        if library_category_key:
+            if library_category_key == ALL_SENTENCES_CATEGORY_KEY:
+                return DEFAULT_LIBRARY_CATEGORY_KEY
+            category = self.repositories.get_telegram_library_category(telegram_user_id, library_category_key)
+            if category is None:
+                raise ValidationError(f"Unknown library category: {library_category_key}")
+            return library_category_key
+        self._ensure_default_category(telegram_user_id)
+        return DEFAULT_LIBRARY_CATEGORY_KEY
+
+    def _slugify_category_key(self, value: str) -> str:
+        cleaned = re.sub(r"[^a-z0-9_]+", "_", value.strip().lower())
+        cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+        return cleaned or "category"
+
+    def _counter_dict(self, counter: Counter[str]) -> dict[str, int]:
+        return dict(sorted((key, int(value)) for key, value in counter.items() if key))
 
     def _slugify_recipe_key(self, value: str) -> str:
         cleaned = re.sub(r"[^a-z0-9_]+", "_", value.strip().lower())

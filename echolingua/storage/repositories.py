@@ -80,7 +80,19 @@ class TelegramCsvImportRecord:
     file_path: str
     imported_rows: int
     imported_sentence_ids: list[str]
+    library_category_key: str
     created_at: str
+
+
+@dataclass(frozen=True)
+class TelegramLibraryCategory:
+    telegram_user_id: int
+    category_key: str
+    display_name: str
+    target_language: str
+    description: str
+    created_at: str
+    updated_at: str
 
 
 @dataclass(frozen=True)
@@ -101,6 +113,242 @@ class TelegramUserRecipe:
 class StorageRepositories:
     def __init__(self, db: Database) -> None:
         self.db = db
+
+    def ensure_telegram_library_category(
+        self,
+        telegram_user_id: int,
+        category_key: str,
+        display_name: str,
+        *,
+        target_language: str = "fr",
+        description: str = "",
+    ) -> None:
+        now = _utc_now()
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO telegram_library_categories(
+                  telegram_user_id, category_key, display_name, target_language, description, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(telegram_user_id, category_key) DO UPDATE SET
+                  display_name=excluded.display_name,
+                  target_language=excluded.target_language,
+                  description=excluded.description,
+                  updated_at=excluded.updated_at
+                """,
+                (telegram_user_id, category_key, display_name, target_language, description, now, now),
+            )
+
+    def update_telegram_library_category(
+        self,
+        telegram_user_id: int,
+        category_key: str,
+        *,
+        display_name: str | None = None,
+        target_language: str | None = None,
+        description: str | None = None,
+    ) -> None:
+        current = self.get_telegram_library_category(telegram_user_id, category_key)
+        if current is None:
+            raise KeyError(category_key)
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE telegram_library_categories
+                SET display_name=?, target_language=?, description=?, updated_at=?
+                WHERE telegram_user_id=? AND category_key=?
+                """,
+                (
+                    display_name if display_name is not None else current.display_name,
+                    target_language if target_language is not None else current.target_language,
+                    description if description is not None else current.description,
+                    _utc_now(),
+                    telegram_user_id,
+                    category_key,
+                ),
+            )
+
+    def list_telegram_library_categories(self, telegram_user_id: int) -> list[TelegramLibraryCategory]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT telegram_user_id, category_key, display_name, target_language, description, created_at, updated_at
+                FROM telegram_library_categories
+                WHERE telegram_user_id=?
+                ORDER BY lower(display_name), category_key
+                """,
+                (telegram_user_id,),
+            ).fetchall()
+        return [
+            TelegramLibraryCategory(
+                telegram_user_id=int(row["telegram_user_id"]),
+                category_key=str(row["category_key"]),
+                display_name=str(row["display_name"]),
+                target_language=str(row["target_language"]),
+                description=str(row["description"]),
+                created_at=str(row["created_at"]),
+                updated_at=str(row["updated_at"]),
+            )
+            for row in rows
+        ]
+
+    def get_telegram_library_category(self, telegram_user_id: int, category_key: str) -> TelegramLibraryCategory | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT telegram_user_id, category_key, display_name, target_language, description, created_at, updated_at
+                FROM telegram_library_categories
+                WHERE telegram_user_id=? AND category_key=?
+                LIMIT 1
+                """,
+                (telegram_user_id, category_key),
+            ).fetchone()
+        if row is None:
+            return None
+        return TelegramLibraryCategory(
+            telegram_user_id=int(row["telegram_user_id"]),
+            category_key=str(row["category_key"]),
+            display_name=str(row["display_name"]),
+            target_language=str(row["target_language"]),
+            description=str(row["description"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+        )
+
+    def delete_telegram_library_category(self, telegram_user_id: int, category_key: str) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                "DELETE FROM telegram_category_sentences WHERE telegram_user_id=? AND category_key=?",
+                (telegram_user_id, category_key),
+            )
+            conn.execute(
+                "DELETE FROM telegram_category_activity WHERE telegram_user_id=? AND category_key=?",
+                (telegram_user_id, category_key),
+            )
+            conn.execute(
+                "DELETE FROM telegram_library_categories WHERE telegram_user_id=? AND category_key=?",
+                (telegram_user_id, category_key),
+            )
+
+    def add_sentences_to_category(
+        self,
+        telegram_user_id: int,
+        category_key: str,
+        sentence_ids: list[str],
+        *,
+        source_type: str = "manual",
+    ) -> None:
+        if not sentence_ids:
+            return
+        now = _utc_now()
+        with self.db.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO telegram_category_sentences(telegram_user_id, category_key, sentence_id, source_type, added_at)
+                VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(telegram_user_id, category_key, sentence_id) DO UPDATE SET
+                  source_type=excluded.source_type,
+                  added_at=excluded.added_at
+                """,
+                [(telegram_user_id, category_key, sentence_id, source_type, now) for sentence_id in sentence_ids],
+            )
+
+    def replace_category_sentences(
+        self,
+        telegram_user_id: int,
+        category_key: str,
+        sentence_ids: list[str],
+        *,
+        source_type: str = "csv_import",
+    ) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                "DELETE FROM telegram_category_sentences WHERE telegram_user_id=? AND category_key=?",
+                (telegram_user_id, category_key),
+            )
+        self.add_sentences_to_category(telegram_user_id, category_key, sentence_ids, source_type=source_type)
+
+    def remove_sentence_from_category(self, telegram_user_id: int, category_key: str, sentence_id: str) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                "DELETE FROM telegram_category_sentences WHERE telegram_user_id=? AND category_key=? AND sentence_id=?",
+                (telegram_user_id, category_key, sentence_id),
+            )
+
+    def list_category_sentence_ids(self, telegram_user_id: int, category_key: str) -> list[str]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT sentence_id
+                FROM telegram_category_sentences
+                WHERE telegram_user_id=? AND category_key=?
+                ORDER BY
+                  CASE
+                    WHEN sentence_id GLOB '[0-9]*' THEN CAST(sentence_id AS INTEGER)
+                    ELSE 2147483647
+                  END,
+                  sentence_id
+                """,
+                (telegram_user_id, category_key),
+            ).fetchall()
+        return [str(row["sentence_id"]) for row in rows]
+
+    def category_sentence_counts(self, telegram_user_id: int) -> dict[str, int]:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT category_key, COUNT(*) AS count
+                FROM telegram_category_sentences
+                WHERE telegram_user_id=?
+                GROUP BY category_key
+                """,
+                (telegram_user_id,),
+            ).fetchall()
+        return {str(row["category_key"]): int(row["count"]) for row in rows}
+
+    def record_category_activity(
+        self,
+        telegram_user_id: int,
+        category_key: str,
+        *,
+        recipe_name: str,
+        action: str,
+        target_language: str,
+        sentence_id: str | None = None,
+    ) -> None:
+        with self.db.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO telegram_category_activity(
+                  telegram_user_id, category_key, sentence_id, recipe_name, action, target_language, created_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                (telegram_user_id, category_key, sentence_id, recipe_name, action, target_language, _utc_now()),
+            )
+
+    def list_category_activity_counts(
+        self,
+        telegram_user_id: int,
+        category_key: str,
+        *,
+        group_by: str,
+    ) -> dict[str, int]:
+        if group_by not in {"recipe_name", "action", "target_language"}:
+            raise ValueError(f"Unsupported group_by field: {group_by}")
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {group_by} AS key, COUNT(*) AS count
+                FROM telegram_category_activity
+                WHERE telegram_user_id=? AND category_key=?
+                GROUP BY {group_by}
+                ORDER BY count DESC, key
+                """,
+                (telegram_user_id, category_key),
+            ).fetchall()
+        return {str(row["key"]): int(row["count"]) for row in rows if str(row["key"])}
 
     def create_job(self, job_id: str, recipe_name: str) -> None:
         with self.db.connect() as conn:
@@ -698,14 +946,15 @@ class StorageRepositories:
         file_name: str,
         file_path: Path,
         imported_sentence_ids: list[str],
+        library_category_key: str = "",
     ) -> None:
         with self.db.connect() as conn:
             conn.execute(
                 """
                 INSERT INTO telegram_csv_imports(
-                  telegram_user_id, file_name, file_path, imported_rows, imported_sentence_ids_json, created_at
+                  telegram_user_id, file_name, file_path, imported_rows, imported_sentence_ids_json, library_category_key, created_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     telegram_user_id,
@@ -713,6 +962,7 @@ class StorageRepositories:
                     str(file_path),
                     len(imported_sentence_ids),
                     json.dumps(imported_sentence_ids, ensure_ascii=False),
+                    library_category_key,
                     _utc_now(),
                 ),
             )
@@ -721,7 +971,7 @@ class StorageRepositories:
         with self.db.connect() as conn:
             row = conn.execute(
                 """
-                SELECT telegram_user_id, file_name, file_path, imported_rows, imported_sentence_ids_json, created_at
+                SELECT telegram_user_id, file_name, file_path, imported_rows, imported_sentence_ids_json, library_category_key, created_at
                 FROM telegram_csv_imports
                 WHERE telegram_user_id=?
                 ORDER BY id DESC
@@ -737,6 +987,7 @@ class StorageRepositories:
             file_path=str(row["file_path"]),
             imported_rows=int(row["imported_rows"]),
             imported_sentence_ids=list(json.loads(str(row["imported_sentence_ids_json"]) or "[]")),
+            library_category_key=str(row["library_category_key"] or ""),
             created_at=str(row["created_at"]),
         )
 
