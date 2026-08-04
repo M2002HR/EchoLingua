@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Awaitable, Callable
+from pathlib import Path
+from typing import Any, Awaitable, Callable
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.error import BadRequest
@@ -263,17 +264,131 @@ async def send_all_sentences(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not sentences:
         await _send_or_edit(update, "📭 هنوز جمله‌ای برای این دسته ثبت نشده. اول CSV وارد کن یا جمله اضافه کن.", reply_markup=_main_menu_keyboard())
         return
+    active_jobs = _active_send_all_jobs(context)
+    job_key = _send_all_job_key(user_id, category_key)
+    existing = active_jobs.get(job_key)
+    if existing is not None and not existing.done():
+        await _send_or_edit(
+            update,
+            f"⏳ ارسال همه برای دسته `{escape_markdown(descriptor.display_name)}` از قبل در حال اجراست.",
+            reply_markup=_main_menu_keyboard(),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
     await _send_or_edit(update, f"🎧 شروع ارسال {len(sentences)} ویس برای دسته `{escape_markdown(descriptor.display_name)}`.", reply_markup=_main_menu_keyboard(), parse_mode=ParseMode.MARKDOWN)
-    payloads = service.generate_all_sentence_audio_for_category(user_id, category_key)
-    for index, payload in enumerate(payloads, start=1):
-        await context.bot.send_chat_action(chat_id=_chat_id(update), action=ChatAction.UPLOAD_VOICE)
-        with payload["audio_path"].open("rb") as handle:
-            await context.bot.send_audio(
-                chat_id=_chat_id(update),
-                audio=handle,
-                caption=f"{payload['caption']}\n\n🧩 {index}/{len(payloads)} | Recipe: {payload['recipe_name']}",
+    task = context.application.create_task(
+        _run_send_all_sentences(
+            bot=context.bot,
+            service=service,
+            chat_id=_chat_id(update),
+            telegram_user_id=user_id,
+            category_key=category_key,
+            category_display_name=descriptor.display_name,
+            sentence_ids=[sentence.id for sentence in sentences],
+        )
+    )
+    active_jobs[job_key] = task
+    task.add_done_callback(lambda finished: _clear_send_all_job(context, job_key, finished))
+
+
+async def _run_send_all_sentences(
+    *,
+    bot: Bot,
+    service: TelegramBotService,
+    chat_id: int,
+    telegram_user_id: int,
+    category_key: str,
+    category_display_name: str,
+    sentence_ids: list[str],
+) -> None:
+    total = len(sentence_ids)
+    sent_count = 0
+    failed_ids: list[str] = []
+    category_label = escape_markdown(category_display_name)
+    try:
+        for index, sentence_id in enumerate(sentence_ids, start=1):
+            try:
+                payload = await asyncio.to_thread(
+                    service.generate_sentence_audio_for_user,
+                    telegram_user_id,
+                    sentence_id,
+                    library_category_key=category_key,
+                )
+                await bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_VOICE)
+                with payload["audio_path"].open("rb") as handle:
+                    await bot.send_audio(
+                        chat_id=chat_id,
+                        audio=handle,
+                        caption=f"{payload['caption']}\n\n🧩 {index}/{total} | Recipe: {payload['recipe_name']}",
+                    )
+                sent_count += 1
+            except Exception:
+                failed_ids.append(sentence_id)
+                LOGGER.exception(
+                    "Telegram send-all item failed",
+                    extra={
+                        "telegram_user_id": telegram_user_id,
+                        "category_key": category_key,
+                        "sentence_id": sentence_id,
+                        "index": index,
+                        "total": total,
+                    },
+                )
+            if index % 10 == 0 or index == total:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"⏳ پیشرفت ارسال دسته `{category_label}`: {index}/{total}",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+        if failed_ids:
+            preview = ", ".join(failed_ids[:10])
+            suffix = "" if len(failed_ids) <= 10 else " ..."
+            await bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"⚠️ ارسال دسته `{category_label}` تمام شد.\n"
+                    f"موفق: `{sent_count}` از `{total}`\n"
+                    f"ناموفق: `{len(failed_ids)}`\n"
+                    f"Sentence IDها: `{escape_markdown(preview + suffix)}`"
+                ),
+                reply_markup=MENU_KEYBOARD,
+                parse_mode=ParseMode.MARKDOWN,
             )
-    await context.bot.send_message(chat_id=_chat_id(update), text="✅ ارسال همه فایل‌های دسته تمام شد.", reply_markup=MENU_KEYBOARD)
+            return
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"✅ ارسال همه فایل‌های دسته `{category_label}` تمام شد.",
+            reply_markup=MENU_KEYBOARD,
+            parse_mode=ParseMode.MARKDOWN,
+        )
+    except Exception:
+        LOGGER.exception(
+            "Telegram send-all batch failed",
+            extra={
+                "telegram_user_id": telegram_user_id,
+                "category_key": category_key,
+                "total": total,
+            },
+        )
+        await bot.send_message(
+            chat_id=chat_id,
+            text="❌ ارسال همه فایل‌ها با خطا متوقف شد. دوباره تلاش کن یا دسته را کوچکتر کن.",
+            reply_markup=MENU_KEYBOARD,
+        )
+
+
+def _active_send_all_jobs(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
+    return context.application.bot_data.setdefault("active_send_all_jobs", {})
+
+
+def _send_all_job_key(telegram_user_id: int, category_key: str) -> str:
+    return f"{telegram_user_id}:{category_key}"
+
+
+def _clear_send_all_job(context: ContextTypes.DEFAULT_TYPE, job_key: str, task: Any) -> None:
+    jobs = context.application.bot_data.get("active_send_all_jobs", {})
+    if jobs.get(job_key) is task:
+        jobs.pop(job_key, None)
 
 
 async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

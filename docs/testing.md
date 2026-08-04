@@ -224,6 +224,16 @@ PY
 
 If the configured Telegram proxy is healthy, this prints the proxy URL. If the proxy is broken, it prints `None` and the bot should start with a direct Telegram connection instead.
 
+Telegram import-category regression check:
+
+```bash
+python -m pytest -q tests/unit/test_telegram_app.py
+```
+
+This covers the two Telegram-specific CSV flows that previously broke at runtime:
+- selecting an existing category after uploading a CSV
+- creating a new category from the CSV import flow
+
 Bot runtime:
 
 ```bash

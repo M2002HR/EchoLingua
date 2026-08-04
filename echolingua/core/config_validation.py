@@ -34,15 +34,38 @@ def resolve_tts_provider_policy(
 
 
 def resolve_voice(provider_config: dict[str, Any], language: str | None, configured_voice: str | None) -> str:
-    if configured_voice:
-        return configured_voice
     voices = provider_config.get("voices", {})
+    if configured_voice:
+        requested_voice = str(configured_voice).strip()
+        if requested_voice:
+            if requested_voice in voices:
+                return str(voices[requested_voice])
+            if requested_voice in {str(value) for value in voices.values()}:
+                return requested_voice
+            if _looks_like_provider_voice(str(provider_config.get("provider", "")), requested_voice):
+                return requested_voice
     if language and language in voices:
         return str(voices[language])
     default_voice = provider_config.get("default_voice")
     if default_voice:
         return str(default_voice)
     raise ConfigError("TTS provider is missing a usable voice configuration.")
+
+
+def _looks_like_provider_voice(provider_type: str, voice: str) -> bool:
+    if provider_type == "edge":
+        parts = voice.split("-")
+        if len(parts) < 3:
+            return False
+        locale, region = parts[0], parts[1]
+        if not locale.isalpha() or not region.isalpha() or locale.lower() != locale or region.upper() != region:
+            return False
+        return parts[-1].endswith("Neural")
+    if provider_type == "piper":
+        return "_" in voice and "-" in voice
+    if provider_type == "fake":
+        return True
+    return False
 
 
 def _validate_default_config(default_config: dict[str, Any]) -> None:

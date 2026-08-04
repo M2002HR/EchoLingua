@@ -78,10 +78,25 @@ def test_resolve_tts_provider_policy_prefers_recipe_values() -> None:
 
 
 def test_resolve_voice_uses_language_map_then_default() -> None:
-    provider = {"voices": {"fr": "fake-fr", "en": "fake-en"}, "default_voice": "fake-neutral"}
+    provider = {"provider": "fake", "voices": {"fr": "fake-fr", "en": "fake-en"}, "default_voice": "fake-neutral"}
     assert resolve_voice(provider, "fr", None) == "fake-fr"
     assert resolve_voice(provider, "de", None) == "fake-neutral"
     assert resolve_voice(provider, "fr", "manual-voice") == "manual-voice"
+
+
+def test_resolve_voice_maps_alias_and_ignores_invalid_edge_hint() -> None:
+    provider = {
+        "provider": "edge",
+        "voices": {
+            "fa": "fa-IR-DilaraNeural",
+            "fa_male": "fa-IR-FaridNeural",
+            "fr": "fr-FR-DeniseNeural",
+        },
+        "default_voice": "fr-FR-DeniseNeural",
+    }
+    assert resolve_voice(provider, "fa", "fa_male") == "fa-IR-FaridNeural"
+    assert resolve_voice(provider, "fa", "fa_pause_fr_slow_fr_normal") == "fa-IR-DilaraNeural"
+    assert resolve_voice(provider, "fa", "fa-IR-FaridNeural") == "fa-IR-FaridNeural"
 
 
 def test_runner_recipe_policy_and_voice_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,3 +132,33 @@ def test_runner_recipe_policy_and_voice_resolution(tmp_path: Path, monkeypatch: 
     )
     assert summary["provider_policy"]["strategy"] == "explicit"
     assert summary["provider_policy"]["explicit_provider"] == "fake"
+
+
+def test_runner_falls_back_from_invalid_sentence_voice_hint_for_edge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(PROJECT_ROOT)
+    base = load_config()
+    csv_path = tmp_path / "invalid_voice_hint.csv"
+    csv_path.write_text(
+        (
+            "id,persian,english,french,level,category,recommended_start,enabled,tags,notes,priority,difficulty,voice_hint,pronunciation_note\n"
+            "1,سلام.,Hello.,Salut.,A0,greeting,day_1,true,\"starter,daily\",,0,0,fa_pause_fr_slow_fr_normal,\n"
+        ),
+        encoding="utf-8",
+    )
+    config = type(base)(
+        root_dir=tmp_path,
+        default=base.default,
+        providers=base.providers,
+        recipes=base.recipes,
+    )
+    runner = PipelineRunner(config)
+    plan = runner.build_plan(
+        "job-edge-voice-hint-1",
+        csv_path,
+        "shadowing_basic",
+        from_sentence_id="1",
+        to_sentence_id="1",
+        provider_name="edge",
+    )
+    voices = [segment.voice for segment in plan.segments if segment.kind == "tts"]
+    assert voices == ["fa-IR-DilaraNeural", "fr-FR-DeniseNeural", "fr-FR-DeniseNeural"]
